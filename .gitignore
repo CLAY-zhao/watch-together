@@ -1,0 +1,19 @@
+# Python
+__pycache__/
+*.py[cod]
+.venv/
+venv/
+*.egg-info/
+
+# Node
+node_modules/
+app/dist/
+*.log
+
+# IDE
+.vscode/
+.idea/
+.DS_Store
+
+# 本地测试
+vite.dev.log

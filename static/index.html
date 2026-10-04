@@ -1,0 +1,698 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+
+<head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover" />
+    <title>一起看 · 投屏</title>
+    <style>
+        :root {
+            --bg: #0e1116;
+            --panel: #161b22;
+            --panel2: #1c232d;
+            --line: #2a323d;
+            --fg: #e6edf3;
+            --muted: #8b949e;
+            --accent: #3b82f6;
+            --danger: #ef4444;
+            --ok: #22c55e;
+        }
+
+        * {
+            box-sizing: border-box
+        }
+
+        html,
+        body {
+            height: 100%;
+            margin: 0
+        }
+
+        body {
+            background: var(--bg);
+            color: var(--fg);
+            overflow: hidden;
+            font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", "PingFang SC", "Microsoft YaHei", sans-serif;
+            -webkit-font-smoothing: antialiased;
+        }
+
+        #app {
+            height: 100%
+        }
+
+        .page {
+            height: 100%;
+            display: flex;
+            flex-direction: column
+        }
+
+        .center {
+            align-items: center;
+            justify-content: center;
+            padding: 20px
+        }
+
+        .card {
+            background: var(--panel);
+            border: 1px solid var(--line);
+            border-radius: 14px;
+            padding: 22px;
+            width: 100%;
+            max-width: 440px;
+        }
+
+        h1 {
+            font-size: 20px;
+            margin: 0 0 6px
+        }
+
+        h2 {
+            font-size: 16px;
+            margin: 0 0 12px;
+            font-weight: 600
+        }
+
+        .muted {
+            color: var(--muted)
+        }
+
+        .small {
+            font-size: 12px
+        }
+
+        .err {
+            color: var(--danger);
+            font-size: 13px;
+            margin: 10px 0 0
+        }
+
+        .btn {
+            display: inline-flex;
+            align-items: center;
+            justify-content: center;
+            gap: 6px;
+            background: var(--panel2);
+            color: var(--fg);
+            border: 1px solid var(--line);
+            border-radius: 10px;
+            padding: 10px 16px;
+            font-size: 14px;
+            cursor: pointer;
+            text-decoration: none;
+            transition: .15s;
+            font-family: inherit;
+        }
+
+        .btn:hover {
+            border-color: #3d4757
+        }
+
+        .btn.primary {
+            background: var(--accent);
+            border-color: var(--accent);
+            color: #fff
+        }
+
+        .btn.primary:hover {
+            background: #2f6fd8
+        }
+
+        .btn.danger {
+            background: var(--danger);
+            border-color: var(--danger);
+            color: #fff
+        }
+
+        .btn.block {
+            width: 100%
+        }
+
+        .btn.small {
+            padding: 6px 12px;
+            font-size: 13px
+        }
+
+        /* 顶栏 */
+        .topbar {
+            display: flex;
+            align-items: center;
+            gap: 10px;
+            padding: 12px 16px;
+            border-bottom: 1px solid var(--line);
+            background: var(--panel);
+            flex: none;
+            font-size: 14px;
+        }
+
+        .dot {
+            width: 9px;
+            height: 9px;
+            border-radius: 50%;
+            background: #4b5563
+        }
+
+        .dot.ok {
+            background: var(--ok);
+            box-shadow: 0 0 8px var(--ok)
+        }
+
+        .spacer {
+            flex: 1
+        }
+
+        /* 广播页 */
+        .body {
+            flex: 1;
+            display: flex;
+            min-height: 0
+        }
+
+        .preview {
+            flex: 1;
+            position: relative;
+            background: #000;
+            display: flex;
+            align-items: center;
+            justify-content: center;
+            min-width: 0;
+        }
+
+        .preview video {
+            width: 100%;
+            height: 100%;
+            object-fit: contain;
+            background: #000
+        }
+
+        .preview-empty {
+            position: absolute;
+            color: var(--muted);
+            font-size: 14px
+        }
+
+        .panel {
+            width: 340px;
+            flex: none;
+            border-left: 1px solid var(--line);
+            background: var(--panel);
+            padding: 18px;
+            overflow: auto;
+            display: flex;
+            flex-direction: column;
+            gap: 14px;
+        }
+
+        .field {
+            display: flex;
+            flex-direction: column;
+            gap: 6px
+        }
+
+        .field label {
+            font-size: 12px;
+            color: var(--muted)
+        }
+
+        input[type=text],
+        input[readonly] {
+            background: var(--panel2);
+            border: 1px solid var(--line);
+            color: var(--fg);
+            border-radius: 8px;
+            padding: 9px 11px;
+            font-size: 13px;
+            font-family: inherit;
+            width: 100%;
+            outline: none;
+        }
+
+        input:focus {
+            border-color: var(--accent)
+        }
+
+        input:disabled {
+            opacity: .6
+        }
+
+        .copyrow {
+            display: flex;
+            gap: 8px
+        }
+
+        .copyrow input {
+            flex: 1;
+            min-width: 0
+        }
+
+        .check {
+            display: flex;
+            align-items: center;
+            gap: 8px;
+            font-size: 13px;
+            color: var(--muted);
+            cursor: pointer
+        }
+
+        .check input {
+            accent-color: var(--accent);
+            width: 15px;
+            height: 15px
+        }
+
+        /* 观看页 */
+        .watch {
+            background: #000;
+            position: relative
+        }
+
+        .watch video {
+            width: 100%;
+            height: 100%;
+            object-fit: contain;
+            background: #000
+        }
+
+        .overlay {
+            position: absolute;
+            inset: 0;
+            display: flex;
+            align-items: center;
+            justify-content: center;
+            background: rgba(0, 0, 0, .75);
+            backdrop-filter: blur(4px);
+            padding: 20px;
+            z-index: 10;
+        }
+
+        .overlay .card {
+            text-align: center
+        }
+
+        @media (max-width: 860px) {
+            .body {
+                flex-direction: column
+            }
+
+            .panel {
+                width: 100%;
+                border-left: none;
+                border-top: 1px solid var(--line);
+                max-height: 52vh
+            }
+
+            .preview {
+                min-height: 40vh
+            }
+        }
+    </style>
+</head>
+
+<body>
+    <div id="app">
+
+        <!-- ============ 首页 ============ -->
+        <div v-if="route==='home'" class="page center">
+            <div class="card">
+                <h1>一起看 · 投屏</h1>
+                <p class="muted small" style="margin:0 0 18px">WebRTC 点对点 · 免费 · 无需付费会员</p>
+                <div style="display:flex;gap:10px;flex-wrap:wrap">
+                    <a class="btn primary" href="#/broadcast">💻 我要投屏（电脑）</a>
+                    <a class="btn" href="#/watch">📱 我要观看（手机）</a>
+                </div>
+            </div>
+        </div>
+
+        <!-- ============ 投屏端 ============ -->
+        <div v-else-if="route==='broadcast'" class="page">
+            <div class="topbar">
+                <span class="dot" :class="{ok:live}"></span>
+                <span>{{ live ? '正在投屏' : '未开始' }}</span>
+                <span class="spacer"></span>
+                <span class="muted">观众 {{ viewerCount }}</span>
+            </div>
+
+            <div class="body">
+                <div class="preview">
+                    <video id="localVideo" autoplay muted playsinline></video>
+                    <div v-if="!live" class="preview-empty">屏幕预览会显示在这里</div>
+                </div>
+
+                <div class="panel">
+                    <div class="field">
+                        <label>房间号</label>
+                        <input type="text" v-model="roomId" :disabled="live" @change="onRoomChange" />
+                    </div>
+
+                    <label class="check">
+                        <input type="checkbox" v-model="useMic" :disabled="live" />
+                        同时传输麦克风（语音聊天）
+                    </label>
+
+                    <button v-if="!live" class="btn primary block" @click="startBroadcast">
+                        🖥 开始共享屏幕
+                    </button>
+                    <button v-else class="btn danger block" @click="stopBroadcast">
+                        ⏹ 停止投屏
+                    </button>
+
+                    <div class="field" v-if="shareUrl">
+                        <label>把这个链接发给她（手机打开）</label>
+                        <div class="copyrow">
+                            <input type="text" :value="shareUrl" readonly />
+                            <button class="btn small" @click="copyShare">{{ copied ? '已复制' : '复制' }}</button>
+                        </div>
+                    </div>
+
+                    <p class="muted small" style="margin:0;line-height:1.6">
+                        提示：共享时请选择 <b>整个屏幕</b>，并勾选左下角
+                        <b>「分享系统音频」</b>，她才能听到电影声音。
+                    </p>
+
+                    <p v-if="errorMsg" class="err">{{ errorMsg }}</p>
+                </div>
+            </div>
+        </div>
+
+        <!-- ============ 观看端 ============ -->
+        <div v-else class="page watch">
+            <video id="remoteVideo" playsinline autoplay></video>
+
+            <div v-if="!playing" class="overlay">
+                <div class="card">
+                    <h2>{{ statusText }}</h2>
+                    <button v-if="!watchStarted" class="btn primary block" @click="startWatch">
+                        ▶︎ 进入房间
+                    </button>
+                    <button v-else-if="hasMedia" class="btn primary block" @click="forcePlay">
+                        ▶︎ 点击播放
+                    </button>
+                    <p class="muted small" style="margin:14px 0 0">房间：{{ roomId }}</p>
+                </div>
+            </div>
+        </div>
+
+    </div>
+
+    <script src="https://unpkg.com/vue@3/dist/vue.global.prod.js"></script>
+    <script>
+        const { createApp, ref, onMounted } = Vue;
+
+        /* ---------- 配置 ---------- */
+        const ICE_SERVERS = [
+            { urls: 'stun:stun.l.google.com:19302' },
+            { urls: 'stun:stun.miwifi.com:3478' },
+        ];
+        // 如果双方都在严格 NAT 后面（P2P 连不上），在这里加 TURN：
+        // { urls: 'turn:xxx.metered.live:443', username: '...', credential: '...' }
+
+        const WS_BASE = (location.protocol === 'https:' ? 'wss://' : 'ws://') + location.host;
+        const CLIENT_ID = Math.random().toString(36).slice(2, 10);
+        const QS = new URLSearchParams(location.search);
+
+        /* ---------- 工具函数 ---------- */
+        function addIce(pc, candidate) {
+            if (!candidate) return Promise.resolve();
+            const c = (typeof RTCIceCandidate !== 'undefined')
+                ? new RTCIceCandidate(candidate) : candidate;
+            if (!pc.remoteDescription) {
+                pc._pending = pc._pending || [];
+                pc._pending.push(c);
+                return Promise.resolve();
+            }
+            return pc.addIceCandidate(c).catch(e => console.warn('addIce', e));
+        }
+        async function flushIce(pc) {
+            const q = pc._pending || [];
+            pc._pending = [];
+            for (const c of q) {
+                try { await pc.addIceCandidate(c); } catch (e) { console.warn(e); }
+            }
+        }
+
+        /* ---------- App ---------- */
+        createApp({
+            setup() {
+                /* ---------- 路由 ---------- */
+                const route = ref(getRoute());
+                function getRoute() {
+                    const h = location.hash.replace(/^#\/?/, '');
+                    if (h === 'broadcast') return 'broadcast';
+                    if (h === 'watch') return 'watch';
+                    return 'home';
+                }
+                window.addEventListener('hashchange', () => { route.value = getRoute(); });
+
+                const roomId = ref(QS.get('room') || localStorage.getItem('room') || 'home');
+
+                /* ================= 广播端 ================= */
+                const live = ref(false);
+                const viewerCount = ref(0);
+                const useMic = ref(false);
+                const shareUrl = ref('');
+                const errorMsg = ref('');
+                const copied = ref(false);
+
+                let bWs = null;
+                let bDisplay = null;
+                let bMic = null;
+                const bPeers = new Map();   // viewerId -> RTCPeerConnection
+
+                async function buildShareUrl() {
+                    let host = location.host;
+                    if (location.hostname === 'localhost' || location.hostname === '127.0.0.1') {
+                        try {
+                            const r = await fetch('/api/lanip');
+                            const { ip } = await r.json();
+                            host = `${ip}:${location.port || 80}`;
+                        } catch (e) { /* ignore */ }
+                    }
+                    shareUrl.value = `${location.protocol}//${host}/?room=${encodeURIComponent(roomId.value)}#/watch`;
+                }
+
+                function onRoomChange() {
+                    localStorage.setItem('room', roomId.value);
+                    buildShareUrl();
+                }
+
+                function sendB(obj) {
+                    if (bWs && bWs.readyState === WebSocket.OPEN) bWs.send(JSON.stringify(obj));
+                }
+
+                function updateViewerCount() { viewerCount.value = bPeers.size; }
+
+                function closePeer(viewerId) {
+                    const pc = bPeers.get(viewerId);
+                    if (pc) {
+                        try { pc.close(); } catch (e) { }
+                        bPeers.delete(viewerId);
+                    }
+                    updateViewerCount();
+                }
+
+                async function makeOffer(viewerId) {
+                    closePeer(viewerId);
+
+                    const pc = new RTCPeerConnection({ iceServers: ICE_SERVERS });
+                    bPeers.set(viewerId, pc);
+                    updateViewerCount();
+
+                    const tracks = [
+                        ...bDisplay.getTracks(),
+                        ...(bMic ? bMic.getTracks() : []),
+                    ];
+                    const stream = new MediaStream(tracks);
+                    tracks.forEach(t => pc.addTrack(t, stream));
+
+                    pc.onicecandidate = e => {
+                        if (e.candidate) sendB({ type: 'ice', viewerId, candidate: e.candidate });
+                    };
+                    pc.onconnectionstatechange = () => {
+                        if (pc.connectionState === 'failed') closePeer(viewerId);
+                    };
+
+                    const offer = await pc.createOffer();
+                    await pc.setLocalDescription(offer);
+                    sendB({
+                        type: 'offer', viewerId,
+                        sdp: { type: pc.localDescription.type, sdp: pc.localDescription.sdp },
+                    });
+                }
+
+                function connectBroadcastWs() {
+                    bWs = new WebSocket(`${WS_BASE}/ws/${encodeURIComponent(roomId.value)}/broadcaster/${CLIENT_ID}`);
+
+                    bWs.onmessage = async ev => {
+                        let msg; try { msg = JSON.parse(ev.data); } catch (e) { return; }
+
+                        if (msg.type === 'viewer-joined') {
+                            await makeOffer(msg.viewerId);
+                        } else if (msg.type === 'answer') {
+                            const pc = bPeers.get(msg.viewerId);
+                            if (pc) {
+                                await pc.setRemoteDescription(new RTCSessionDescription(msg.sdp));
+                                await flushIce(pc);
+                            }
+                        } else if (msg.type === 'ice') {
+                            const pc = bPeers.get(msg.viewerId);
+                            if (pc) await addIce(pc, msg.candidate);
+                        } else if (msg.type === 'viewer-left') {
+                            closePeer(msg.viewerId);
+                        }
+                    };
+
+                    bWs.onclose = () => {
+                        [...bPeers.keys()].forEach(closePeer);
+                        if (live.value) setTimeout(() => { if (live.value) connectBroadcastWs(); }, 1500);
+                    };
+                }
+
+                async function startBroadcast() {
+                    errorMsg.value = '';
+                    try {
+                        bDisplay = await navigator.mediaDevices.getDisplayMedia({
+                            video: { frameRate: { ideal: 30, max: 60 } },
+                            audio: true,   // 系统声音（Windows 上共享整个屏幕时可勾选）
+                        });
+                    } catch (e) {
+                        errorMsg.value = '已取消屏幕共享';
+                        return;
+                    }
+
+                    if (useMic.value) {
+                        try {
+                            bMic = await navigator.mediaDevices.getUserMedia({
+                                audio: { echoCancellation: true, noiseSuppression: true, autoGainControl: true },
+                            });
+                        } catch (e) {
+                            console.warn('麦克风获取失败', e);
+                        }
+                    }
+
+                    // 本地预览
+                    const lv = document.getElementById('localVideo');
+                    lv.srcObject = new MediaStream([
+                        ...bDisplay.getTracks(), ...(bMic ? bMic.getTracks() : []),
+                    ]);
+                    lv.play().catch(() => { });
+
+                    // 用户点击浏览器自带的「停止共享」
+                    bDisplay.getVideoTracks()[0].addEventListener('ended', () => stopBroadcast());
+
+                    live.value = true;
+                    connectBroadcastWs();
+                }
+
+                function stopBroadcast() {
+                    live.value = false;
+                    [...bPeers.keys()].forEach(closePeer);
+                    if (bWs) { try { bWs.close(); } catch (e) { } bWs = null; }
+                    if (bDisplay) { bDisplay.getTracks().forEach(t => t.stop()); bDisplay = null; }
+                    if (bMic) { bMic.getTracks().forEach(t => t.stop()); bMic = null; }
+                    const lv = document.getElementById('localVideo');
+                    if (lv) lv.srcObject = null;
+                }
+
+                function copyShare() {
+                    navigator.clipboard.writeText(shareUrl.value).then(() => {
+                        copied.value = true;
+                        setTimeout(() => copied.value = false, 1500);
+                    });
+                }
+
+                /* ================= 观看端 ================= */
+                const watchStarted = ref(false);
+                const playing = ref(false);
+                const hasMedia = ref(false);
+                const statusText = ref('准备好了吗？');
+
+                let vWs = null;
+                let vPc = null;
+                let vStream = null;
+
+                function sendV(obj) {
+                    if (vWs && vWs.readyState === WebSocket.OPEN) vWs.send(JSON.stringify(obj));
+                }
+
+                function forcePlay() {
+                    const v = document.getElementById('remoteVideo');
+                    if (v) v.play().then(() => { playing.value = true; }).catch(() => { });
+                }
+
+                async function handleOffer(sdp) {
+                    if (!vPc) {
+                        vStream = new MediaStream();
+                        vPc = new RTCPeerConnection({ iceServers: ICE_SERVERS });
+
+                        vPc.ontrack = e => {
+                            vStream.addTrack(e.track);
+                            hasMedia.value = true;
+                            const v = document.getElementById('remoteVideo');
+                            if (v && v.srcObject !== vStream) v.srcObject = vStream;
+                            v && v.play().then(() => { playing.value = true; })
+                                .catch(() => { statusText.value = '请点击播放'; });
+                        };
+                        vPc.onicecandidate = e => {
+                            if (e.candidate) sendV({ type: 'ice', candidate: e.candidate });
+                        };
+                        vPc.onconnectionstatechange = () => {
+                            if (vPc.connectionState === 'connected') statusText.value = '';
+                            if (vPc.connectionState === 'failed') statusText.value = '连接失败，请刷新重试';
+                        };
+                    }
+
+                    await vPc.setRemoteDescription(new RTCSessionDescription(sdp));
+                    await flushIce(vPc);
+
+                    const answer = await vPc.createAnswer();
+                    await vPc.setLocalDescription(answer);
+                    sendV({
+                        type: 'answer',
+                        sdp: { type: vPc.localDescription.type, sdp: vPc.localDescription.sdp },
+                    });
+                }
+
+                function startWatch() {
+                    watchStarted.value = true;
+                    statusText.value = '连接中…';
+
+                    vWs = new WebSocket(`${WS_BASE}/ws/${encodeURIComponent(roomId.value)}/viewer/${CLIENT_ID}`);
+
+                    vWs.onopen = () => { statusText.value = '等待主播开始投屏…'; };
+                    vWs.onclose = () => {
+                        playing.value = false;
+                        statusText.value = '连接已断开';
+                    };
+                    vWs.onmessage = async ev => {
+                        let msg; try { msg = JSON.parse(ev.data); } catch (e) { return; }
+
+                        if (msg.type === 'offer') {
+                            await handleOffer(msg.sdp);
+                        } else if (msg.type === 'ice') {
+                            if (vPc) await addIce(vPc, msg.candidate);
+                        } else if (msg.type === 'broadcaster-left') {
+                            playing.value = false;
+                            statusText.value = '主播已停止投屏';
+                        }
+                    };
+                }
+
+                /* ---------- 生命周期 ---------- */
+                onMounted(() => {
+                    if (route.value === 'broadcast') buildShareUrl();
+                });
+
+                return {
+                    route, roomId,
+                    // 广播端
+                    live, viewerCount, useMic, shareUrl, errorMsg, copied,
+                    startBroadcast, stopBroadcast, copyShare, onRoomChange,
+                    // 观看端
+                    watchStarted, playing, hasMedia, statusText,
+                    startWatch, forcePlay,
+                };
+            }
+        }).mount('#app');
+    </script>
+</body>
+
+</html>

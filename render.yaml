@@ -1,0 +1,24 @@
+services:
+  - type: web
+    name: watch-together
+    runtime: python
+    plan: free
+    region: singapore          # 亚洲用户选 singapore 延迟低
+    branch: main
+    buildCommand: |
+      cd app && npm install && npm run build && cd ..
+      pip install -r requirements.txt
+    startCommand: uvicorn signaling:app --host 0.0.0.0 --port $PORT
+    healthCheckPath: /healthz
+    envVars:
+      - key: PYTHON_VERSION
+        value: 3.11.9
+      - key: NODE_VERSION
+        value: 20.11.1
+      # TURN 配置（按需填，见下文）
+      # - key: TURN_URL
+      #   value: turn:xxx.metered.live:443
+      # - key: TURN_USERNAME
+      #   sync: false
+      # - key: TURN_CREDENTIAL
+      #   sync: false

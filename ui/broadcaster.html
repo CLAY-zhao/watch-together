@@ -1,0 +1,897 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+
+<head>
+    <meta charset="UTF-8">
+    <title>一起看 · 投屏</title>
+    <style>
+        :root {
+            --bg: #0a0b0f;
+            --bg-2: #12141a;
+            --panel: rgba(255, 255, 255, .035);
+            --panel-2: rgba(255, 255, 255, .06);
+            --line: rgba(255, 255, 255, .08);
+            --fg: #f1f5f9;
+            --fg-2: #94a3b8;
+            --fg-3: #64748b;
+            --accent: #7c6bff;
+            --accent-2: #4f8cff;
+            --ok: #22c55e;
+            --danger: #ff4d6d;
+            --warn: #f59e0b;
+        }
+
+        * {
+            box-sizing: border-box;
+            margin: 0;
+            padding: 0
+        }
+
+        html,
+        body,
+        #app {
+            height: 100%
+        }
+
+        body {
+            background: var(--bg);
+            color: var(--fg);
+            font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", "PingFang SC", "Microsoft YaHei", sans-serif;
+            font-size: 14px;
+            overflow: hidden;
+            user-select: none;
+            -webkit-font-smoothing: antialiased;
+        }
+
+        button {
+            font-family: inherit;
+            cursor: pointer;
+            border: none;
+            background: none;
+            color: inherit
+        }
+
+        input {
+            font-family: inherit
+        }
+
+        .app {
+            height: 100%;
+            display: flex;
+            flex-direction: column;
+            background:
+                radial-gradient(900px 500px at 85% -20%, rgba(124, 107, 255, .18), transparent 60%),
+                radial-gradient(700px 500px at -10% 110%, rgba(79, 140, 255, .14), transparent 60%),
+                var(--bg);
+        }
+
+        /* ============ 顶栏 ============ */
+        .topbar {
+            flex: none;
+            height: 56px;
+            display: flex;
+            align-items: center;
+            gap: 16px;
+            padding: 0 18px;
+            background: rgba(10, 11, 15, .6);
+            backdrop-filter: blur(20px);
+            -webkit-backdrop-filter: blur(20px);
+            border-bottom: 1px solid var(--line);
+            -webkit-app-region: drag;
+            /* pywebview 无边框模式可选 */
+        }
+
+        .topbar>* {
+            -webkit-app-region: no-drag
+        }
+
+        .brand {
+            display: flex;
+            align-items: center;
+            gap: 10px
+        }
+
+        .logo {
+            width: 34px;
+            height: 34px;
+            border-radius: 10px;
+            background: linear-gradient(135deg, var(--accent), var(--accent-2));
+            display: flex;
+            align-items: center;
+            justify-content: center;
+            color: #fff;
+            box-shadow: 0 8px 20px -6px rgba(124, 107, 255, .7);
+        }
+
+        .brand-text {
+            display: flex;
+            flex-direction: column;
+            line-height: 1.15
+        }
+
+        .brand-text strong {
+            font-size: 14px;
+            font-weight: 700;
+            letter-spacing: -.01em
+        }
+
+        .brand-text span {
+            font-size: 11px;
+            color: var(--fg-3)
+        }
+
+        .status {
+            display: inline-flex;
+            align-items: center;
+            gap: 8px;
+            padding: 6px 12px;
+            border-radius: 999px;
+            background: var(--panel);
+            border: 1px solid var(--line);
+            font-size: 12px;
+            color: var(--fg-2);
+        }
+
+        .dot {
+            width: 8px;
+            height: 8px;
+            border-radius: 50%;
+            background: #475569;
+            flex: none
+        }
+
+        .dot.ok {
+            background: var(--ok);
+            box-shadow: 0 0 8px var(--ok);
+            animation: pulse 2s infinite
+        }
+
+        .dot.warn {
+            background: var(--warn);
+            box-shadow: 0 0 8px var(--warn)
+        }
+
+        .dot.err {
+            background: var(--danger);
+            box-shadow: 0 0 8px var(--danger)
+        }
+
+        @keyframes pulse {
+
+            0%,
+            100% {
+                opacity: 1
+            }
+
+            50% {
+                opacity: .5
+            }
+        }
+
+        .spacer {
+            flex: 1
+        }
+
+        .viewer-badge {
+            display: inline-flex;
+            align-items: center;
+            gap: 6px;
+            padding: 6px 12px;
+            border-radius: 999px;
+            background: var(--panel);
+            border: 1px solid var(--line);
+            font-size: 12px;
+            color: var(--fg-2);
+        }
+
+        .viewer-badge svg {
+            color: var(--accent)
+        }
+
+        /* ============ 主体 ============ */
+        .main {
+            flex: 1;
+            display: flex;
+            min-height: 0
+        }
+
+        /* 预览区 */
+        .preview {
+            flex: 1;
+            position: relative;
+            background: #000;
+            min-width: 0;
+            display: flex;
+            align-items: center;
+            justify-content: center;
+        }
+
+        .preview video {
+            width: 100%;
+            height: 100%;
+            object-fit: contain;
+            background: #000;
+            display: block;
+        }
+
+        .preview-empty {
+            position: absolute;
+            inset: 0;
+            display: flex;
+            flex-direction: column;
+            align-items: center;
+            justify-content: center;
+            gap: 12px;
+            color: var(--fg-3);
+            pointer-events: none;
+        }
+
+        .preview-empty .ico {
+            font-size: 56px;
+            opacity: .6;
+            animation: float 3s ease-in-out infinite;
+        }
+
+        .preview-empty p {
+            font-size: 14px
+        }
+
+        @keyframes float {
+
+            0%,
+            100% {
+                transform: translateY(0)
+            }
+
+            50% {
+                transform: translateY(-6px)
+            }
+        }
+
+        /* 预览区左下角音频指示 */
+        .preview-hud {
+            position: absolute;
+            left: 16px;
+            bottom: 16px;
+            display: flex;
+            align-items: center;
+            gap: 10px;
+            padding: 8px 12px;
+            border-radius: 12px;
+            background: rgba(0, 0, 0, .55);
+            backdrop-filter: blur(12px);
+            -webkit-backdrop-filter: blur(12px);
+            border: 1px solid rgba(255, 255, 255, .08);
+        }
+
+        .meter {
+            display: flex;
+            align-items: flex-end;
+            gap: 2px;
+            height: 22px;
+            width: 110px
+        }
+
+        .meter i {
+            flex: 1;
+            background: var(--ok);
+            border-radius: 1px;
+            transition: height .06s linear;
+            min-height: 2px;
+        }
+
+        .meter.idle i {
+            background: #475569
+        }
+
+        .hud-label {
+            font-size: 11px;
+            color: var(--fg-2);
+            display: flex;
+            align-items: center;
+            gap: 6px;
+        }
+
+        /* 右侧面板 */
+        .panel {
+            width: 340px;
+            flex: none;
+            border-left: 1px solid var(--line);
+            background: rgba(18, 20, 26, .6);
+            backdrop-filter: blur(20px);
+            -webkit-backdrop-filter: blur(20px);
+            padding: 18px;
+            display: flex;
+            flex-direction: column;
+            gap: 14px;
+            overflow-y: auto;
+        }
+
+        .card {
+            background: var(--panel);
+            border: 1px solid var(--line);
+            border-radius: 14px;
+            padding: 14px;
+            display: flex;
+            flex-direction: column;
+            gap: 10px;
+        }
+
+        .card label {
+            font-size: 11px;
+            color: var(--fg-3);
+            text-transform: uppercase;
+            letter-spacing: .06em;
+            font-weight: 600;
+        }
+
+        .card input {
+            background: rgba(0, 0, 0, .35);
+            border: 1px solid var(--line);
+            border-radius: 10px;
+            padding: 11px 13px;
+            color: var(--fg);
+            font-size: 14px;
+            outline: none;
+            width: 100%;
+            transition: border-color .2s, background .2s;
+        }
+
+        .card input:focus {
+            border-color: var(--accent);
+            background: rgba(124, 107, 255, .08)
+        }
+
+        .card input:disabled {
+            opacity: .55;
+            cursor: not-allowed
+        }
+
+        .card .hint {
+            font-size: 11px;
+            color: var(--fg-3);
+            margin-top: -2px
+        }
+
+        .share-row {
+            display: flex;
+            gap: 8px
+        }
+
+        .share-row input {
+            flex: 1;
+            min-width: 0;
+            font-size: 12px;
+            color: var(--fg-2)
+        }
+
+        .btn-copy {
+            flex: none;
+            padding: 0 14px;
+            background: var(--panel-2);
+            border: 1px solid var(--line);
+            border-radius: 10px;
+            font-size: 12px;
+            color: var(--fg);
+            transition: all .15s;
+        }
+
+        .btn-copy:hover {
+            background: rgba(124, 107, 255, .15);
+            border-color: var(--accent)
+        }
+
+        .audio-status {
+            display: flex;
+            align-items: center;
+            gap: 8px;
+            font-size: 13px;
+        }
+
+        .audio-status .dot {
+            width: 8px;
+            height: 8px
+        }
+
+        /* 麦克风开关 */
+        .check-row {
+            display: flex;
+            align-items: center;
+            gap: 10px;
+            padding: 12px 14px;
+            background: var(--panel);
+            border: 1px solid var(--line);
+            border-radius: 14px;
+            cursor: pointer;
+            transition: all .15s;
+        }
+
+        .check-row:hover {
+            border-color: rgba(255, 255, 255, .16)
+        }
+
+        .check-row input {
+            width: 16px;
+            height: 16px;
+            accent-color: var(--accent);
+            cursor: pointer;
+        }
+
+        .check-row span {
+            font-size: 13px;
+            color: var(--fg)
+        }
+
+        /* 主按钮 */
+        .btn-main,
+        .btn-stop {
+            padding: 15px 20px;
+            border-radius: 14px;
+            font-size: 14px;
+            font-weight: 600;
+            letter-spacing: .01em;
+            transition: all .15s;
+            display: flex;
+            align-items: center;
+            justify-content: center;
+            gap: 8px;
+        }
+
+        .btn-main {
+            background: linear-gradient(135deg, var(--accent), var(--accent-2));
+            color: #fff;
+            box-shadow: 0 12px 30px -8px rgba(124, 107, 255, .7);
+        }
+
+        .btn-main:hover {
+            transform: translateY(-1px);
+            box-shadow: 0 16px 36px -8px rgba(124, 107, 255, .8)
+        }
+
+        .btn-main:active {
+            transform: translateY(0)
+        }
+
+        .btn-stop {
+            background: rgba(255, 77, 109, .12);
+            border: 1px solid rgba(255, 77, 109, .35);
+            color: #ff8ba0;
+        }
+
+        .btn-stop:hover {
+            background: rgba(255, 77, 109, .2)
+        }
+
+        /* 底部提示 */
+        .tips {
+            padding: 12px 14px;
+            border-radius: 14px;
+            background: rgba(245, 158, 11, .07);
+            border: 1px solid rgba(245, 158, 11, .2);
+            font-size: 12px;
+            line-height: 1.65;
+            color: #fcd088;
+        }
+
+        .tips b {
+            color: #fbbf24
+        }
+
+        /* 错误提示 */
+        .err {
+            padding: 12px 14px;
+            border-radius: 14px;
+            background: rgba(255, 77, 109, .08);
+            border: 1px solid rgba(255, 77, 109, .25);
+            font-size: 12px;
+            line-height: 1.55;
+            color: #ffb3c1;
+        }
+
+        /* 滚动条 */
+        .panel::-webkit-scrollbar {
+            width: 6px
+        }
+
+        .panel::-webkit-scrollbar-thumb {
+            background: rgba(255, 255, 255, .1);
+            border-radius: 3px
+        }
+    </style>
+</head>
+
+<body>
+    <div id="app">
+        <div class="app">
+
+            <!-- 顶栏 -->
+            <header class="topbar">
+                <div class="brand">
+                    <div class="logo">
+                        <svg viewBox="0 0 48 48" width="18" height="18">
+                            <path d="M16 12 L36 24 L16 36 Z" fill="currentColor" />
+                        </svg>
+                    </div>
+                    <div class="brand-text">
+                        <strong>一起看</strong>
+                        <span>投屏端 · Desktop</span>
+                    </div>
+                </div>
+
+                <div class="status">
+                    <span class="dot" :class="statusDot"></span>
+                    <span>{{ statusText }}</span>
+                </div>
+
+                <div class="spacer"></div>
+
+                <div class="viewer-badge" v-if="live">
+                    <svg viewBox="0 0 24 24" width="14" height="14" fill="none" stroke="currentColor" stroke-width="2"
+                        stroke-linecap="round" stroke-linejoin="round">
+                        <path d="M17 21v-2a4 4 0 0 0-4-4H5a4 4 0 0 0-4 4v2" />
+                        <circle cx="9" cy="7" r="4" />
+                        <path d="M23 21v-2a4 4 0 0 0-3-3.87" />
+                        <path d="M16 3.13a4 4 0 0 1 0 7.75" />
+                    </svg>
+                    <span>{{ viewerCount }} 位观众</span>
+                </div>
+            </header>
+
+            <!-- 主体 -->
+            <main class="main">
+
+                <!-- 预览 -->
+                <section class="preview">
+                    <video id="previewVideo" autoplay muted playsinline></video>
+
+                    <div class="preview-empty" v-if="!live">
+                        <div class="ico">📺</div>
+                        <p>点击右侧「开始共享屏幕」，选择要投屏的内容</p>
+                    </div>
+
+                    <div class="preview-hud" v-if="live">
+                        <div class="meter" :class="{idle: !hasAudio || audioLevel < 3}">
+                            <i v-for="n in 20" :key="n" :style="{height: barHeight(n)}"></i>
+                        </div>
+                        <div class="hud-label">
+                            <span class="dot" :class="hasAudio ? 'ok' : 'err'"></span>
+                            {{ hasAudio ? '音频正常' : '无音频' }}
+                        </div>
+                    </div>
+                </section>
+
+                <!-- 面板 -->
+                <aside class="panel">
+
+                    <!-- 房间 -->
+                    <div class="card">
+                        <label>房间号</label>
+                        <input v-model="roomId" :disabled="live" @change="onRoomChange" spellcheck="false">
+                    </div>
+
+                    <!-- 分享 -->
+                    <div class="card" v-if="shareUrl">
+                        <label>分享链接</label>
+                        <div class="share-row">
+                            <input :value="shareUrl" readonly>
+                            <button class="btn-copy" @click="copyShare">
+                                {{ copied ? '✓' : '复制' }}
+                            </button>
+                        </div>
+                        <p class="hint">发给她，手机浏览器打开即可观看</p>
+                    </div>
+
+                    <!-- 音频状态 -->
+                    <div class="card" v-if="live">
+                        <label>系统声音</label>
+                        <div class="audio-status">
+                            <span class="dot" :class="hasAudio ? 'ok' : 'err'"></span>
+                            <span>{{ hasAudio ? '已捕获' : '未捕获，请查看下方提示' }}</span>
+                        </div>
+                    </div>
+
+                    <!-- 麦克风 -->
+                    <label class="check-row">
+                        <input type="checkbox" v-model="useMic" :disabled="live">
+                        <span>同时传输我的麦克风</span>
+                    </label>
+
+                    <!-- 主按钮 -->
+                    <button class="btn-main" v-if="!live" @click="startBroadcast">
+                        <svg viewBox="0 0 24 24" width="16" height="16" fill="none" stroke="currentColor"
+                            stroke-width="2.4" stroke-linecap="round" stroke-linejoin="round">
+                            <rect x="2" y="3" width="20" height="14" rx="2" />
+                            <line x1="8" y1="21" x2="16" y2="21" />
+                            <line x1="12" y1="17" x2="12" y2="21" />
+                        </svg>
+                        开始共享屏幕
+                    </button>
+                    <button class="btn-stop" v-else @click="stopBroadcast">
+                        <svg viewBox="0 0 24 24" width="16" height="16" fill="currentColor">
+                            <rect x="6" y="6" width="12" height="12" rx="2" />
+                        </svg>
+                        停止共享
+                    </button>
+
+                    <!-- 提示 -->
+                    <div class="tips" v-if="!live">
+                        <b>💡 共享技巧</b><br>
+                        · 弹窗中选「<b>整个屏幕</b>」<br>
+                        · 勾选左下角「<b>分享系统音频</b>」<br>
+                        · macOS 需安装 BlackHole 才能捕获系统声
+                    </div>
+
+                    <div class="err" v-if="live && !hasAudio">
+                        <b>⚠️ 未捕获到系统声音</b><br>
+                        请点击「停止共享」，重新共享时：
+                        选「整个屏幕」并勾选「分享系统音频」
+                    </div>
+
+                    <div class="err" v-if="errorMsg && !live">
+                        {{ errorMsg }}
+                    </div>
+
+                </aside>
+            </main>
+        </div>
+    </div>
+
+    <script src="https://unpkg.com/vue@3/dist/vue.global.prod.js"></script>
+    <script>
+        const { createApp, ref, computed, onMounted } = Vue;
+
+        const ICE_SERVERS = [
+            { urls: 'stun:stun.l.google.com:19302' },
+            { urls: 'stun:stun1.l.google.com:19302' },
+        ];
+
+        const CLIENT_ID = Math.random().toString(36).slice(2, 10);
+        const WS_BASE = (location.protocol === 'https:' ? 'wss://' : 'ws://') + location.host;
+
+        function addIce(pc, candidate) {
+            if (!candidate) return Promise.resolve();
+            const c = (typeof RTCIceCandidate !== 'undefined')
+                ? new RTCIceCandidate(candidate) : candidate;
+            if (!pc.remoteDescription) {
+                pc._pending = pc._pending || [];
+                pc._pending.push(c);
+                return Promise.resolve();
+            }
+            return pc.addIceCandidate(c).catch(e => console.warn('addIce', e));
+        }
+        async function flushIce(pc) {
+            const q = pc._pending || [];
+            pc._pending = [];
+            for (const c of q) {
+                try { await pc.addIceCandidate(c); } catch (e) { }
+            }
+        }
+
+        createApp({
+            setup() {
+                const roomId = ref(localStorage.getItem('wt:room') || 'home');
+                const live = ref(false);
+                const viewerCount = ref(0);
+                const useMic = ref(false);
+                const shareUrl = ref('');
+                const errorMsg = ref('');
+                const copied = ref(false);
+                const hasAudio = ref(false);
+                const audioLevel = ref(0);
+
+                let bWs = null;
+                let bDisplay = null;
+                let bMic = null;
+                const bPeers = new Map();
+
+                let audioCtx = null;
+                let analyser = null;
+                let rafId = 0;
+
+                /* ---------- 状态 ---------- */
+                const statusDot = computed(() => {
+                    if (!live.value) return '';
+                    if (!hasAudio.value) return 'warn';
+                    if (viewerCount.value > 0) return 'ok';
+                    return 'ok';
+                });
+                const statusText = computed(() => {
+                    if (!live.value) return '未开始';
+                    if (viewerCount.value === 0) return '等待观众';
+                    return '正在投屏';
+                });
+
+                /* ---------- 音波表 ---------- */
+                function stopAudioMeter() {
+                    cancelAnimationFrame(rafId); rafId = 0;
+                    analyser = null;
+                    if (audioCtx) { try { audioCtx.close() } catch (e) { } audioCtx = null }
+                    audioLevel.value = 0;
+                }
+                function startAudioMeter(stream) {
+                    stopAudioMeter();
+                    const tracks = stream.getAudioTracks();
+                    if (!tracks.length) { hasAudio.value = false; return }
+                    hasAudio.value = true;
+                    try {
+                        audioCtx = new (window.AudioContext || window.webkitAudioContext)();
+                        const src = audioCtx.createMediaStreamSource(new MediaStream(tracks));
+                        analyser = audioCtx.createAnalyser();
+                        analyser.fftSize = 256;
+                        src.connect(analyser);
+                        const buf = new Uint8Array(analyser.frequencyBinCount);
+                        const tick = () => {
+                            if (!analyser) return;
+                            analyser.getByteFrequencyData(buf);
+                            let sum = 0;
+                            for (let i = 0; i < buf.length; i++) sum += buf[i];
+                            audioLevel.value = Math.min(100, Math.round(sum / buf.length * 2.4));
+                            rafId = requestAnimationFrame(tick);
+                        };
+                        tick();
+                    } catch (e) { console.warn('meter', e) }
+                }
+                function barHeight(n) {
+                    if (!hasAudio.value) return '4%';
+                    const base = audioLevel.value;
+                    const wave = 0.5 + Math.sin(n / 1.8) * 0.5;
+                    return Math.max(8, Math.min(100, base * (0.6 + wave * 0.6))) + '%';
+                }
+
+                /* ---------- 分享链接 ---------- */
+                async function buildShareUrl() {
+                    let host = location.host;
+                    if (location.hostname === '127.0.0.1' || location.hostname === 'localhost') {
+                        try {
+                            const r = await fetch('/api/lanip');
+                            const { ip } = await r.json();
+                            host = `${ip}:${location.port || 80}`;
+                        } catch (e) { }
+                    }
+                    shareUrl.value = `${location.protocol}//${host}/watch?room=${encodeURIComponent(roomId.value)}`;
+                }
+                function onRoomChange() {
+                    localStorage.setItem('wt:room', roomId.value);
+                    buildShareUrl();
+                }
+                function copyShare() {
+                    navigator.clipboard.writeText(shareUrl.value).then(() => {
+                        copied.value = true;
+                        setTimeout(() => copied.value = false, 1500);
+                    });
+                }
+
+                /* ---------- 信令 ---------- */
+                function sendB(obj) {
+                    if (bWs && bWs.readyState === WebSocket.OPEN) bWs.send(JSON.stringify(obj));
+                }
+                function closePeer(vid) {
+                    const pc = bPeers.get(vid);
+                    if (pc) { try { pc.close() } catch (e) { } bPeers.delete(vid) }
+                    viewerCount.value = bPeers.size;
+                }
+
+                async function makeOffer(vid) {
+                    closePeer(vid);
+                    const pc = new RTCPeerConnection({ iceServers: ICE_SERVERS });
+                    bPeers.set(vid, pc);
+                    viewerCount.value = bPeers.size;
+
+                    const stream = new MediaStream([
+                        ...bDisplay.getTracks(),
+                        ...(bMic ? bMic.getTracks() : []),
+                    ]);
+                    stream.getTracks().forEach(t => pc.addTrack(t, stream));
+
+                    pc.onicecandidate = e => {
+                        if (e.candidate) sendB({ type: 'ice', viewerId: vid, candidate: e.candidate });
+                    };
+                    pc.onconnectionstatechange = () => {
+                        if (pc.connectionState === 'failed') closePeer(vid);
+                    };
+
+                    const offer = await pc.createOffer();
+                    await pc.setLocalDescription(offer);
+                    sendB({
+                        type: 'offer', viewerId: vid,
+                        sdp: { type: pc.localDescription.type, sdp: pc.localDescription.sdp },
+                    });
+                }
+
+                function connectWs() {
+                    bWs = new WebSocket(`${WS_BASE}/ws/${encodeURIComponent(roomId.value)}/broadcaster/${CLIENT_ID}`);
+                    bWs.onmessage = async ev => {
+                        let msg; try { msg = JSON.parse(ev.data) } catch (e) { return }
+                        if (msg.type === 'viewer-joined') {
+                            await makeOffer(msg.viewerId);
+                        } else if (msg.type === 'answer') {
+                            const pc = bPeers.get(msg.viewerId);
+                            if (pc) {
+                                await pc.setRemoteDescription(new RTCSessionDescription(msg.sdp));
+                                await flushIce(pc);
+                            }
+                        } else if (msg.type === 'ice') {
+                            const pc = bPeers.get(msg.viewerId);
+                            if (pc) await addIce(pc, msg.candidate);
+                        } else if (msg.type === 'viewer-left') {
+                            closePeer(msg.viewerId);
+                        }
+                    };
+                    bWs.onclose = () => {
+                        [...bPeers.keys()].forEach(closePeer);
+                        if (live.value) setTimeout(() => { if (live.value) connectWs() }, 1500);
+                    };
+                }
+
+                /* ---------- 开始 / 停止 ---------- */
+                async function startBroadcast() {
+                    errorMsg.value = '';
+                    try {
+                        bDisplay = await navigator.mediaDevices.getDisplayMedia({
+                            video: { frameRate: { ideal: 30, max: 60 } },
+                            audio: {
+                                echoCancellation: false,
+                                noiseSuppression: false,
+                                autoGainControl: false,
+                            },
+                        });
+                    } catch (e) {
+                        errorMsg.value = '已取消屏幕共享';
+                        return;
+                    }
+
+                    const at = bDisplay.getAudioTracks();
+                    if (!at.length) {
+                        hasAudio.value = false;
+                    } else {
+                        hasAudio.value = true;
+                    }
+
+                    if (useMic.value) {
+                        try {
+                            bMic = await navigator.mediaDevices.getUserMedia({
+                                audio: { echoCancellation: true, noiseSuppression: true },
+                            });
+                        } catch (e) { console.warn('mic failed', e) }
+                    }
+
+                    const pv = document.getElementById('previewVideo');
+                    pv.srcObject = new MediaStream([
+                        ...bDisplay.getTracks(),
+                        ...(bMic ? bMic.getTracks() : []),
+                    ]);
+                    pv.play().catch(() => { });
+
+                    startAudioMeter(bDisplay);
+
+                    bDisplay.getVideoTracks()[0].addEventListener('ended', stopBroadcast);
+
+                    live.value = true;
+                    connectWs();
+                }
+
+                function stopBroadcast() {
+                    live.value = false;
+                    hasAudio.value = false;
+                    [...bPeers.keys()].forEach(closePeer);
+                    if (bWs) { try { bWs.close() } catch (e) { } bWs = null }
+                    if (bDisplay) { bDisplay.getTracks().forEach(t => t.stop()); bDisplay = null }
+                    if (bMic) { bMic.getTracks().forEach(t => t.stop()); bMic = null }
+                    stopAudioMeter();
+                    const pv = document.getElementById('previewVideo');
+                    if (pv) pv.srcObject = null;
+                }
+
+                onMounted(buildShareUrl);
+
+                return {
+                    roomId, live, viewerCount, useMic, shareUrl, errorMsg, copied,
+                    hasAudio, audioLevel, statusDot, statusText,
+                    barHeight, onRoomChange, copyShare, startBroadcast, stopBroadcast,
+                };
+            }
+        }).mount('#app');
+    </script>
+</body>
+
+</html>
