@@ -1,24 +1,31 @@
 services:
+  # 后端 Web 服务
   - type: web
     name: watch-together
     runtime: python
     plan: free
-    region: singapore          # 亚洲用户选 singapore 延迟低
-    branch: main
-    buildCommand: |
-      cd app && npm install && npm run build && cd ..
-      pip install -r requirements.txt
+    region: singapore          # 亚洲用户选择新加坡延迟低
+    buildCommand: pip install -r requirements.txt
     startCommand: uvicorn signaling:app --host 0.0.0.0 --port $PORT
     healthCheckPath: /healthz
     envVars:
       - key: PYTHON_VERSION
         value: 3.11.9
-      - key: NODE_VERSION
-        value: 20.11.1
-      # TURN 配置（按需填，见下文）
-      # - key: TURN_URL
-      #   value: turn:xxx.metered.live:443
-      # - key: TURN_USERNAME
-      #   sync: false
-      # - key: TURN_CREDENTIAL
-      #   sync: false
+      # TURN 服务器配置（从环境变量读取）
+      - key: TURN_URL
+        value: turn:asia.relay.metered.ca:80,turns:asia.relay.metered.ca:443
+      - key: TURN_USERNAME
+        value: your_username
+      - key: TURN_CREDENTIAL
+        value: your_credential
+
+  # 前端静态站点
+  - type: web
+    name: watch-together-frontend
+    runtime: static
+    plan: free
+    buildCommand: cd app && npm install && npm run build
+    staticPublishPath: app/dist
+    envVars:
+      - key: VITE_BACKEND_URL
+        value: https://watch-together.onrender.com  # 后端域名
