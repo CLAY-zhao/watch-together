@@ -1,0 +1,19 @@
+{
+    "name": "一起看 · Watch Together",
+    "short_name": "一起看",
+    "description": "与朋友同步观影，无需付费",
+    "start_url": "/",
+    "scope": "/",
+    "display": "standalone",
+    "orientation": "any",
+    "background_color": "#0a0b0f",
+    "theme_color": "#0a0b0f",
+    "icons": [
+        {
+            "src": "/icon.svg",
+            "sizes": "any",
+            "type": "image/svg+xml",
+            "purpose": "any maskable"
+        }
+    ]
+}
