@@ -8,22 +8,24 @@ const ICE_SERVERS = [
         urls: 'stun:stun.relay.metered.ca:80',
     },
     {
-        urls: 'turn:asia.relay.metered.ca:80',
-        username: '9dd6ce6953377deb966f471f',
-        credential: 'QnV7fYMKMKFJd+tx',
-    },
-    {
+        // ★ TURN over TCP —— 跨地域首选（丢包率远低于 UDP）
         urls: 'turn:asia.relay.metered.ca:80?transport=tcp',
         username: '9dd6ce6953377deb966f471f',
         credential: 'QnV7fYMKMKFJd+tx',
     },
     {
-        urls: 'turn:asia.relay.metered.ca:443',
+        // TLS 加密，穿透性最好
+        urls: 'turns:asia.relay.metered.ca:443?transport=tcp',
         username: '9dd6ce6953377deb966f471f',
         credential: 'QnV7fYMKMKFJd+tx',
     },
     {
-        urls: 'turns:asia.relay.metered.ca:443?transport=tcp',
+        urls: 'turn:asia.relay.metered.ca:80',
+        username: '9dd6ce6953377deb966f471f',
+        credential: 'QnV7fYMKMKFJd+tx',
+    },
+    {
+        urls: 'turn:asia.relay.metered.ca:443',
         username: '9dd6ce6953377deb966f471f',
         credential: 'QnV7fYMKMKFJd+tx',
     },

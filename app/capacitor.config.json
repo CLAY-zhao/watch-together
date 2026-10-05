@@ -1,6 +1,6 @@
 {
   "appId": "com.leayoos.watchtogether",
-  "appName": "watch-together",
+  "appName": "CoWatch Live",
   "webDir": "dist",
   "android": {
     "allowMixedContent": true,
@@ -20,6 +20,14 @@
       "style": "DARK",
       "backgroundColor": "#000000",
       "overlaysWebView": false
+    },
+    "BackgroundMode": {
+      "title": "CoWatch 正在通话",
+      "text": "正在与对方语音通话中",
+      "silent": true,
+      "hidden": false,
+      "resume": true,
+      "disableWebViewOptimization": true
     }
   }
 }

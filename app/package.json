@@ -22,16 +22,19 @@
     "clean": "rm -rf dist node_modules/.vite android/app/build ios/App/build"
   },
   "dependencies": {
+    "@anuradev/capacitor-background-mode": "^6.0.0",
     "@capacitor/android": "^6.0.0",
     "@capacitor/app": "^6.0.3",
     "@capacitor/cli": "^6.0.0",
     "@capacitor/core": "^6.0.0",
     "@capacitor/screen-orientation": "^6.0.4",
     "@capacitor/status-bar": "^6.0.3",
+    "@capawesome-team/capacitor-android-foreground-service": "^6.2.0",
     "vue": "^3.4.27",
     "vue-router": "^4.3.2"
   },
   "devDependencies": {
+    "@capacitor/assets": "^3.0.5",
     "@vitejs/plugin-vue": "^5.0.4",
     "vite": "^5.2.11"
   }

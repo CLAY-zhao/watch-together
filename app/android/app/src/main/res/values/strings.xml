@@ -1,7 +1,7 @@
 <?xml version='1.0' encoding='utf-8'?>
 <resources>
-    <string name="app_name">watch-together</string>
-    <string name="title_activity_main">watch-together</string>
+    <string name="app_name">CoWatch Live</string>
+    <string name="title_activity_main">CoWatch Live</string>
     <string name="package_name">com.leayoos.watchtogether</string>
     <string name="custom_url_scheme">com.leayoos.watchtogether</string>
 </resources>
