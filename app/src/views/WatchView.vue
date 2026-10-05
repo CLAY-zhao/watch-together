@@ -68,6 +68,10 @@ const chatInput = ref('')
 const chatMessages = ref([])
 const chatUnread = ref(0)
 
+/* ★ 新消息提示音 */
+const chatSoundEnabled = ref(true)
+let chatNotifAudioCtx = null
+
 let lastEmotion = { emoji: '', ts: 0, combo: 0 }
 
 const videoEl = ref(null)
@@ -281,6 +285,45 @@ function setVoiceVolume(v) {
 }
 
 /* ============================================================
+ *  ★ 新消息提示音
+ * ============================================================ */
+function playChatNotifSound() {
+    if (!chatSoundEnabled.value) return
+    try {
+        if (!chatNotifAudioCtx) {
+            const AC = window.AudioContext || window.webkitAudioContext
+            if (!AC) return
+            chatNotifAudioCtx = new AC()
+        }
+        if (chatNotifAudioCtx.state === 'suspended') {
+            chatNotifAudioCtx.resume()
+        }
+
+        const ctx = chatNotifAudioCtx
+        const now = ctx.currentTime
+
+        // C6 → G6 短促上升音，跟电脑端的"叮"区分
+        const osc = ctx.createOscillator()
+        const gain = ctx.createGain()
+
+        osc.type = 'sine'
+        osc.frequency.setValueAtTime(1046.5, now)          // C6
+        osc.frequency.exponentialRampToValueAtTime(1568, now + 0.08)  // G6
+
+        gain.gain.setValueAtTime(0, now)
+        gain.gain.linearRampToValueAtTime(0.15, now + 0.01)
+        gain.gain.exponentialRampToValueAtTime(0.001, now + 0.22)
+
+        osc.connect(gain)
+        gain.connect(ctx.destination)
+        osc.start(now)
+        osc.stop(now + 0.28)
+    } catch (e) {
+        console.warn('[chat-notif] 音效播放失败:', e)
+    }
+}
+
+/* ============================================================
  *  聊天
  * ============================================================ */
 function addChatMessage(msg) {
@@ -288,6 +331,12 @@ function addChatMessage(msg) {
     while (chatMessages.value.length > 100) {
         chatMessages.value.shift()
     }
+
+    /* ★ 收到对方消息时播放提示音（自己发的不响） */
+    if (msg.from !== 'me') {
+        playChatNotifSound()
+    }
+
     nextTick(() => {
         const el = document.querySelector('.chat-list')
         if (el) el.scrollTop = el.scrollHeight
@@ -1225,6 +1274,25 @@ onUnmounted(async () => {
                         <span class="chat-drawer__dot"></span>
                         聊天
                     </div>
+
+                    <!-- ★ 提示音开关 -->
+                    <button class="chat-drawer__sound" :class="{ 'is-on': chatSoundEnabled }"
+                        @click="chatSoundEnabled = !chatSoundEnabled"
+                        :aria-label="chatSoundEnabled ? '关闭提示音' : '开启提示音'">
+                        <svg v-if="chatSoundEnabled" viewBox="0 0 24 24" width="16" height="16" fill="none"
+                            stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+                            <path d="M11 5L6 9H2v6h4l5 4V5z" />
+                            <path d="M15.5 8.5a5 5 0 0 1 0 7" />
+                            <path d="M19 5a9 9 0 0 1 0 14" />
+                        </svg>
+                        <svg v-else viewBox="0 0 24 24" width="16" height="16" fill="none" stroke="currentColor"
+                            stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+                            <path d="M11 5L6 9H2v6h4l5 4V5z" />
+                            <path d="m23 9-6 6M17 9l6 6" />
+                        </svg>
+                        <span class="chat-drawer__sound-text">{{ chatSoundEnabled ? '提示音' : '静音' }}</span>
+                    </button>
+
                     <button class="chat-drawer__close" @click="showChat = false">
                         <svg viewBox="0 0 24 24" width="18" height="18" fill="none" stroke="currentColor"
                             stroke-width="2.4" stroke-linecap="round" stroke-linejoin="round">
@@ -2274,6 +2342,39 @@ onUnmounted(async () => {
     50% {
         opacity: 0.4;
     }
+}
+
+/* ★ 提示音开关 */
+.chat-drawer__sound {
+    display: inline-flex;
+    align-items: center;
+    gap: 5px;
+    padding: 6px 12px;
+    margin-right: 8px;
+    border-radius: 999px;
+    background: rgba(255, 255, 255, 0.06);
+    border: 1px solid rgba(255, 255, 255, 0.08);
+    color: #64748b;
+    font-family: inherit;
+    font-size: 11.5px;
+    font-weight: 600;
+    cursor: pointer;
+    transition: all 0.18s;
+}
+
+.chat-drawer__sound:active {
+    transform: scale(0.94);
+}
+
+.chat-drawer__sound.is-on {
+    background: rgba(34, 197, 94, 0.15);
+    border-color: rgba(34, 197, 94, 0.4);
+    color: #86efac;
+    box-shadow: 0 0 12px rgba(34, 197, 94, 0.25);
+}
+
+.chat-drawer__sound-text {
+    letter-spacing: 0.02em;
 }
 
 .chat-drawer__close {
