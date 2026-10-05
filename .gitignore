@@ -17,3 +17,6 @@ app/dist/
 
 # 本地测试
 vite.dev.log
+
+# pwd
+pwd.txt

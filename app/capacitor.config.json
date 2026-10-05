@@ -1,0 +1,25 @@
+{
+  "appId": "com.leayoos.watchtogether",
+  "appName": "watch-together",
+  "webDir": "dist",
+  "android": {
+    "allowMixedContent": true,
+    "adjustMarginsForEdgeToEdge": "force"
+  },
+  "ios": {
+    "contentInset": "always"
+  },
+  "plugins": {
+    "SplashScreen": {
+      "launchShowDuration": 800,
+      "backgroundColor": "#000000",
+      "showSpinner": false,
+      "androidSplashResourceName": "splash"
+    },
+    "StatusBar": {
+      "style": "DARK",
+      "backgroundColor": "#000000",
+      "overlaysWebView": false
+    }
+  }
+}

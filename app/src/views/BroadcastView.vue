@@ -1,44 +1,37 @@
 <script setup>
 import { ref, computed, onMounted, onUnmounted } from 'vue'
 import { useIceConfig } from '@/composables/useIceConfig'
+import { getWsBase } from '@/config/backend'
 
 const { iceServers, ensureIceReady } = useIceConfig()
 
-/* ============================================================
- *  常量
- * ============================================================ */
-const ICE_SERVERS = [
-    { urls: 'stun:stun.l.google.com:19302' },
-    { urls: 'stun:stun1.l.google.com:19302' },
-    { urls: 'stun:stun.miwifi.com:3478' },
-]
-
 const CLIENT_ID = Math.random().toString(36).slice(2, 10)
-
-/* 同源 WS：dev 走 Vite proxy，生产走 127.0.0.1:8765 */
-const WS_BASE = (location.protocol === 'https:' ? 'wss://' : 'ws://') + location.host
+const WS_BASE = getWsBase()
 
 /* ============================================================
- *  响应式状态
+ *  状态
  * ============================================================ */
 const roomId = ref(localStorage.getItem('wt:room') || 'home')
 const live = ref(false)
 const viewerCount = ref(0)
-const useMic = ref(false)
+const useMic = ref(true)
 const shareUrl = ref('')
 const errorMsg = ref('')
 const copied = ref(false)
 const hasAudio = ref(false)
 const audioLevel = ref(0)
 const starting = ref(false)
+const voiceChatEnabled = ref(true)
+const remoteVoiceActive = ref(false)
 
-/* ============================================================
- *  非响应式局部变量
- * ============================================================ */
+/* 非响应式 */
 let bWs = null
 let bDisplay = null
 let bMic = null
-const bPeers = new Map()      // viewerId -> RTCPeerConnection
+const bPeers = new Map()
+const bAudioPeers = new Map()
+const bRemoteAudioEls = new Map()
+const audioPendingIce = new Map()
 
 let audioCtx = null
 let analyser = null
@@ -59,7 +52,6 @@ const statusText = computed(() => {
     return `正在投屏 · ${viewerCount.value} 位观众`
 })
 
-/* 音波条高度 */
 function barHeight(n) {
     if (!hasAudio.value) return '4%'
     const base = audioLevel.value
@@ -68,36 +60,28 @@ function barHeight(n) {
 }
 
 /* ============================================================
- *  音频电平表
+ *  音波表
  * ============================================================ */
 function stopAudioMeter() {
     if (rafId) { cancelAnimationFrame(rafId); rafId = 0 }
     analyser = null
-    if (audioCtx) {
-        try { audioCtx.close() } catch (e) { /* ignore */ }
-        audioCtx = null
-    }
+    if (audioCtx) { try { audioCtx.close() } catch (e) { } audioCtx = null }
     audioLevel.value = 0
 }
 
 function startAudioMeter(stream) {
     stopAudioMeter()
     const tracks = stream.getAudioTracks()
-    if (!tracks.length) {
-        hasAudio.value = false
-        return
-    }
+    if (!tracks.length) { hasAudio.value = false; return }
     hasAudio.value = true
     try {
         const AC = window.AudioContext || window.webkitAudioContext
         audioCtx = new AC()
         if (audioCtx.state === 'suspended') audioCtx.resume()
-
         const src = audioCtx.createMediaStreamSource(new MediaStream(tracks))
         analyser = audioCtx.createAnalyser()
         analyser.fftSize = 256
         src.connect(analyser)
-
         const buf = new Uint8Array(analyser.frequencyBinCount)
         const tick = () => {
             if (!analyser) return
@@ -108,31 +92,22 @@ function startAudioMeter(stream) {
             rafId = requestAnimationFrame(tick)
         }
         tick()
-    } catch (e) {
-        console.warn('[audio meter]', e)
-    }
+    } catch (e) { console.warn('[meter]', e) }
 }
 
 /* ============================================================
  *  分享链接
  * ============================================================ */
 async function buildShareUrl() {
-    // 公网部署：直接用当前域名
-    // 本地开发：如果 /api/lanip 返回了真实 IP，用它（局域网共享给手机）
-    let base = location.origin
-
-    // 只在本地 loopback 时才尝试替换为 LAN IP
+    let host = location.host
     if (location.hostname === '127.0.0.1' || location.hostname === 'localhost') {
         try {
             const r = await fetch('/api/lanip')
             const { ip } = await r.json()
-            if (ip && ip !== '127.0.0.1') {
-                base = `${location.protocol}//${ip}:${location.port || 80}`
-            }
-        } catch (e) { /* ignore */ }
+            if (ip && ip !== '127.0.0.1') host = `${ip}:${location.port || 80}`
+        } catch (e) { }
     }
-
-    shareUrl.value = `${base}/#/watch?room=${encodeURIComponent(roomId.value)}`
+    shareUrl.value = `${location.protocol}//${host}/#/watch?room=${encodeURIComponent(roomId.value)}`
 }
 
 function onRoomChange() {
@@ -146,7 +121,6 @@ async function copyShare() {
         if (navigator.clipboard && window.isSecureContext) {
             await navigator.clipboard.writeText(shareUrl.value)
         } else {
-            /* 兜底：老浏览器 / 非安全上下文 */
             const ta = document.createElement('textarea')
             ta.value = shareUrl.value
             ta.style.position = 'fixed'
@@ -158,13 +132,11 @@ async function copyShare() {
         }
         copied.value = true
         setTimeout(() => (copied.value = false), 1500)
-    } catch (e) {
-        console.warn('copy failed', e)
-    }
+    } catch (e) { }
 }
 
 /* ============================================================
- *  WebSocket 信令
+ *  WebSocket
  * ============================================================ */
 function sendB(obj) {
     if (bWs && bWs.readyState === WebSocket.OPEN) {
@@ -172,12 +144,12 @@ function sendB(obj) {
     }
 }
 
+/* ============================================================
+ *  视频 PC
+ * ============================================================ */
 function closePeer(vid) {
     const pc = bPeers.get(vid)
-    if (pc) {
-        try { pc.close() } catch (e) { /* ignore */ }
-        bPeers.delete(vid)
-    }
+    if (pc) { try { pc.close() } catch (e) { } bPeers.delete(vid) }
     viewerCount.value = bPeers.size
 }
 
@@ -187,8 +159,6 @@ function closeAllPeers() {
 
 async function makeOffer(vid) {
     closePeer(vid)
-
-    console.log('[webrtc] 为新观众创建 PC, ICE:', iceServers.value)
     const pc = new RTCPeerConnection({ iceServers: iceServers.value })
     bPeers.set(vid, pc)
     viewerCount.value = bPeers.size
@@ -201,7 +171,7 @@ async function makeOffer(vid) {
 
     pc.onicecandidate = e => {
         if (e.candidate) {
-            sendB({ type: 'ice', viewerId: vid, candidate: e.candidate })
+            sendB({ type: 'ice', channel: 'video', viewerId: vid, candidate: e.candidate })
         }
     }
     pc.onconnectionstatechange = () => {
@@ -213,12 +183,141 @@ async function makeOffer(vid) {
     const offer = await pc.createOffer()
     await pc.setLocalDescription(offer)
     sendB({
-        type: 'offer',
-        viewerId: vid,
+        type: 'offer', channel: 'video', viewerId: vid,
         sdp: { type: pc.localDescription.type, sdp: pc.localDescription.sdp },
     })
 }
 
+/* ============================================================
+ *  ★★★ 语音 PC（关键修复）★★★
+ * ============================================================ */
+function closeAudioPeer(vid) {
+    const pc = bAudioPeers.get(vid)
+    if (pc) { try { pc.close() } catch (e) { } bAudioPeers.delete(vid) }
+
+    // ★ 从 DOM 移除
+    const el = bRemoteAudioEls.get(vid)
+    if (el) {
+        el.srcObject = null
+        try { el.remove() } catch (e) { }
+        bRemoteAudioEls.delete(vid)
+    }
+
+    audioPendingIce.delete(vid)
+    if (bAudioPeers.size === 0) remoteVoiceActive.value = false
+}
+
+function closeAllAudioPeers() {
+    for (const vid of [...bAudioPeers.keys()]) closeAudioPeer(vid)
+}
+
+async function handleAudioOffer(vid, sdp) {
+    console.log('[voice] 📨 收到语音 offer from', vid)
+
+    if (!voiceChatEnabled.value) {
+        sendB({ type: 'voice-rejected', viewerId: vid })
+        return
+    }
+
+    closeAudioPeer(vid)
+
+    const pc = new RTCPeerConnection({ iceServers: iceServers.value })
+    bAudioPeers.set(vid, pc)
+    audioPendingIce.set(vid, [])
+
+    // ★★★ 关键修复：显式声明"只接收音频" ★★★
+    pc.addTransceiver('audio', { direction: 'recvonly' })
+    console.log('[voice] ✅ 已添加 recvonly audio transceiver')
+
+    pc.ontrack = event => {
+        console.log('[voice] 📥 ontrack 触发, kind=', event.track.kind)
+
+        const stream = (event.streams && event.streams[0]) || null
+
+        let el = bRemoteAudioEls.get(vid)
+        if (!el) {
+            el = new Audio()
+            el.autoplay = true
+            el.volume = 1
+            el.setAttribute('playsinline', '')
+            // ★★★ 关键：挂到 DOM，隐藏起来 ★★★
+            el.style.position = 'fixed'
+            el.style.left = '-9999px'
+            el.style.width = '1px'
+            el.style.height = '1px'
+            el.style.opacity = '0'
+            document.body.appendChild(el)
+            bRemoteAudioEls.set(vid, el)
+        }
+
+        if (stream) {
+            el.srcObject = stream
+            el.play()
+                .then(() => {
+                    console.log('[voice] ✅ 语音开始播放')
+                    remoteVoiceActive.value = true
+                })
+                .catch(e => console.warn('[voice] 播放失败:', e))
+        } else {
+            let s = el.srcObject
+            if (!(s instanceof MediaStream)) { s = new MediaStream(); el.srcObject = s }
+            s.addTrack(event.track)
+            el.play()
+                .then(() => {
+                    console.log('[voice] ✅ 语音开始播放（手动加 track）')
+                    remoteVoiceActive.value = true
+                })
+                .catch(e => console.warn('[voice] 播放失败:', e))
+        }
+    }
+
+    pc.onicecandidate = e => {
+        if (e.candidate) {
+            sendB({ type: 'ice', channel: 'audio', viewerId: vid, candidate: e.candidate })
+        }
+    }
+
+    pc.onconnectionstatechange = () => {
+        console.log('[voice] PC state:', pc.connectionState)
+        if (pc.connectionState === 'failed' || pc.connectionState === 'closed') {
+            closeAudioPeer(vid)
+        }
+    }
+
+    await pc.setRemoteDescription(new RTCSessionDescription(sdp))
+    console.log('[voice] ✅ remote description 已设置')
+
+    const pending = audioPendingIce.get(vid) || []
+    for (const c of pending) {
+        try { await pc.addIceCandidate(new RTCIceCandidate(c)) } catch (e) { }
+    }
+    audioPendingIce.set(vid, [])
+
+    const answer = await pc.createAnswer()
+    await pc.setLocalDescription(answer)
+    console.log('[voice] ✅ answer 已创建并发送')
+
+    sendB({
+        type: 'answer', channel: 'audio', viewerId: vid,
+        sdp: { type: pc.localDescription.type, sdp: pc.localDescription.sdp },
+    })
+}
+
+async function handleAudioIce(vid, candidate) {
+    const pc = bAudioPeers.get(vid)
+    if (!pc) return
+    if (!pc.remoteDescription) {
+        const arr = audioPendingIce.get(vid) || []
+        arr.push(candidate)
+        audioPendingIce.set(vid, arr)
+        return
+    }
+    try { await pc.addIceCandidate(new RTCIceCandidate(candidate)) } catch (e) { }
+}
+
+/* ============================================================
+ *  WebSocket 消息处理
+ * ============================================================ */
 function connectWs() {
     const url = `${WS_BASE}/ws/${encodeURIComponent(roomId.value)}/broadcaster/${CLIENT_ID}`
     bWs = new WebSocket(url)
@@ -227,10 +326,18 @@ function connectWs() {
         let msg
         try { msg = JSON.parse(ev.data) } catch (e) { return }
 
+        const channel = msg.channel || 'video'
+
         if (msg.type === 'viewer-joined') {
-            try { await makeOffer(msg.viewerId) }
-            catch (e) { console.warn('makeOffer failed', e) }
-        } else if (msg.type === 'answer') {
+            try { await makeOffer(msg.viewerId) } catch (e) { console.warn(e) }
+        } else if (msg.type === 'viewer-left') {
+            closePeer(msg.viewerId)
+            closeAudioPeer(msg.viewerId)
+        } else if (msg.type === 'offer' && channel === 'audio') {
+            try { await handleAudioOffer(msg.viewerId, msg.sdp) } catch (e) { console.warn(e) }
+        } else if (msg.type === 'ice' && channel === 'audio') {
+            await handleAudioIce(msg.viewerId, msg.candidate)
+        } else if (msg.type === 'answer' && channel === 'video') {
             const pc = bPeers.get(msg.viewerId)
             if (pc) {
                 try {
@@ -240,101 +347,68 @@ function connectWs() {
                     for (const c of pending) {
                         try { await pc.addIceCandidate(new RTCIceCandidate(c)) } catch (e) { }
                     }
-                } catch (e) { console.warn('setRemote answer failed', e) }
+                } catch (e) { }
             }
-        } else if (msg.type === 'ice') {
+        } else if (msg.type === 'ice' && channel === 'video') {
             const pc = bPeers.get(msg.viewerId)
             if (pc) {
                 if (!pc.remoteDescription) {
                     pc._pendingIce = pc._pendingIce || []
                     pc._pendingIce.push(msg.candidate)
                 } else {
-                    try { await pc.addIceCandidate(new RTCIceCandidate(msg.candidate)) }
-                    catch (e) { console.warn('addIce failed', e) }
+                    try { await pc.addIceCandidate(new RTCIceCandidate(msg.candidate)) } catch (e) { }
                 }
             }
-        } else if (msg.type === 'viewer-left') {
-            closePeer(msg.viewerId)
         }
     }
 
-    bWs.onerror = () => {
-        console.warn('[ws] error')
-    }
-
+    bWs.onerror = () => console.warn('[ws] error')
     bWs.onclose = () => {
         closeAllPeers()
-        /* 还在投屏中 → 自动重连 */
-        if (live.value) {
-            setTimeout(() => { if (live.value) connectWs() }, 1500)
-        }
+        closeAllAudioPeers()
+        if (live.value) setTimeout(() => { if (live.value) connectWs() }, 1500)
     }
 }
 
 function disconnectWs() {
-    if (bWs) {
-        try { bWs.close() } catch (e) { /* ignore */ }
-        bWs = null
-    }
+    if (bWs) { try { bWs.close() } catch (e) { } bWs = null }
 }
 
 /* ============================================================
- *  开始 / 停止 投屏
+ *  开始/停止投屏
  * ============================================================ */
 async function startBroadcast() {
     if (starting.value || live.value) return
     errorMsg.value = ''
     starting.value = true
 
-    /* 1. 检查 API 支持 */
     if (!navigator.mediaDevices || !navigator.mediaDevices.getDisplayMedia) {
-        errorMsg.value = '当前环境不支持屏幕共享，请使用 Chrome/Edge 打开'
+        errorMsg.value = '当前环境不支持屏幕共享'
         starting.value = false
         return
     }
 
-    /* 2. 请求屏幕共享（含系统音频） */
     try {
         bDisplay = await navigator.mediaDevices.getDisplayMedia({
-            video: {
-                frameRate: { ideal: 30, max: 60 },
-                width: { ideal: 1920 },
-                height: { ideal: 1080 },
-            },
-            audio: {
-                echoCancellation: false,
-                noiseSuppression: false,
-                autoGainControl: false,
-            },
+            video: { frameRate: { ideal: 30, max: 60 }, width: { ideal: 1920 }, height: { ideal: 1080 } },
+            audio: { echoCancellation: false, noiseSuppression: false, autoGainControl: false },
         })
     } catch (e) {
-        console.warn('getDisplayMedia cancelled', e)
         errorMsg.value = '已取消屏幕共享'
         starting.value = false
         return
     }
 
-    /* 3. 检查是否捕获到系统声音 */
-    const audioTracks = bDisplay.getAudioTracks()
-    hasAudio.value = audioTracks.length > 0
+    hasAudio.value = bDisplay.getAudioTracks().length > 0
 
-    /* 4. 可选麦克风 */
     if (useMic.value) {
         try {
             bMic = await navigator.mediaDevices.getUserMedia({
-                audio: {
-                    echoCancellation: true,
-                    noiseSuppression: true,
-                    autoGainControl: true,
-                },
+                audio: { echoCancellation: true, noiseSuppression: true, autoGainControl: true },
             })
-        } catch (e) {
-            console.warn('麦克风获取失败', e)
-            bMic = null
-        }
+        } catch (e) { bMic = null }
     }
 
-    /* 5. 本地预览 */
     const pv = document.getElementById('previewVideo')
     if (pv) {
         pv.srcObject = new MediaStream([
@@ -344,16 +418,10 @@ async function startBroadcast() {
         pv.play().catch(() => { })
     }
 
-    /* 6. 启动音波表 */
     startAudioMeter(bDisplay)
+    const vt = bDisplay.getVideoTracks()[0]
+    if (vt) vt.addEventListener('ended', () => stopBroadcast())
 
-    /* 7. 用户点浏览器自带的"停止共享"按钮 */
-    const videoTrack = bDisplay.getVideoTracks()[0]
-    if (videoTrack) {
-        videoTrack.addEventListener('ended', () => stopBroadcast())
-    }
-
-    /* 8. 开启投屏状态 */
     live.value = true
     starting.value = false
     connectWs()
@@ -361,42 +429,25 @@ async function startBroadcast() {
 
 function stopBroadcast() {
     if (!live.value) return
-
     live.value = false
     hasAudio.value = false
+    remoteVoiceActive.value = false
 
     closeAllPeers()
+    closeAllAudioPeers()
     disconnectWs()
 
-    if (bDisplay) {
-        bDisplay.getTracks().forEach(t => t.stop())
-        bDisplay = null
-    }
-    if (bMic) {
-        bMic.getTracks().forEach(t => t.stop())
-        bMic = null
-    }
+    if (bDisplay) { bDisplay.getTracks().forEach(t => t.stop()); bDisplay = null }
+    if (bMic) { bMic.getTracks().forEach(t => t.stop()); bMic = null }
 
     stopAudioMeter()
-
     const pv = document.getElementById('previewVideo')
     if (pv) pv.srcObject = null
-
     viewerCount.value = 0
 }
 
-/* ============================================================
- *  生命周期
- * ============================================================ */
 onMounted(async () => {
-    // ICE 拉取失败不阻塞启动
-    try {
-        await Promise.race([
-            ensureIceReady(),
-            new Promise(resolve => setTimeout(resolve, 3000)),
-        ])
-    } catch (e) { /* ignore */ }
-
+    try { await ensureIceReady() } catch (e) { }
     buildShareUrl()
 })
 
@@ -408,8 +459,6 @@ onUnmounted(() => {
 
 <template>
     <div class="app">
-
-        <!-- ============ 顶栏 ============ -->
         <header class="topbar">
             <div class="brand">
                 <div class="logo">
@@ -428,6 +477,11 @@ onUnmounted(() => {
                 <span>{{ statusText }}</span>
             </div>
 
+            <div v-if="live" class="voice-status" :class="{ active: remoteVoiceActive }">
+                <span class="voice-dot"></span>
+                <span>{{ remoteVoiceActive ? '对方正在说话' : (voiceChatEnabled ? '语音已开启' : '语音关闭') }}</span>
+            </div>
+
             <div class="spacer"></div>
 
             <div class="viewer-badge" v-if="live">
@@ -435,17 +489,12 @@ onUnmounted(() => {
                     stroke-linecap="round" stroke-linejoin="round">
                     <path d="M17 21v-2a4 4 0 0 0-4-4H5a4 4 0 0 0-4 4v2" />
                     <circle cx="9" cy="7" r="4" />
-                    <path d="M23 21v-2a4 4 0 0 0-3-3.87" />
-                    <path d="M16 3.13a4 4 0 0 1 0 7.75" />
                 </svg>
                 <span>{{ viewerCount }} 位观众</span>
             </div>
         </header>
 
-        <!-- ============ 主体 ============ -->
         <main class="main">
-
-            <!-- 预览区 -->
             <section class="preview">
                 <video id="previewVideo" autoplay muted playsinline></video>
 
@@ -465,37 +514,31 @@ onUnmounted(() => {
                 </div>
             </section>
 
-            <!-- 面板 -->
             <aside class="panel">
-
                 <div class="card">
                     <label>房间号</label>
-                    <input v-model="roomId" :disabled="live" @change="onRoomChange" spellcheck="false"
-                        autocomplete="off" autocapitalize="off" />
+                    <input v-model="roomId" :disabled="live" @change="onRoomChange" spellcheck="false" />
                 </div>
 
                 <div class="card" v-if="shareUrl">
                     <label>分享链接</label>
                     <div class="share-row">
                         <input :value="shareUrl" readonly />
-                        <button class="btn-copy" @click="copyShare">
-                            {{ copied ? '✓ 已复制' : '复制' }}
-                        </button>
-                    </div>
-                    <p class="hint">发给她，手机浏览器打开即可观看</p>
-                </div>
-
-                <div class="card" v-if="live">
-                    <label>系统声音</label>
-                    <div class="audio-status">
-                        <span class="dot" :class="hasAudio ? 'ok' : 'err'"></span>
-                        <span>{{ hasAudio ? '已捕获' : '未捕获，请查看下方提示' }}</span>
+                        <button class="btn-copy" @click="copyShare">{{ copied ? '✓' : '复制' }}</button>
                     </div>
                 </div>
 
                 <label class="check-row">
                     <input type="checkbox" v-model="useMic" :disabled="live" />
-                    <span>同时传输我的麦克风</span>
+                    <span>传输我的麦克风</span>
+                </label>
+
+                <label class="check-row">
+                    <input type="checkbox" v-model="voiceChatEnabled" :disabled="live" />
+                    <div class="check-text">
+                        <span>接收对方的语音（双向对话）</span>
+                        <span class="check-hint">打开后对方可点手机上的「语音」按钮</span>
+                    </div>
                 </label>
 
                 <button class="btn-main" v-if="!live" :disabled="starting" @click="startBroadcast">
@@ -507,7 +550,6 @@ onUnmounted(() => {
                     </svg>
                     {{ starting ? '正在启动…' : '开始共享屏幕' }}
                 </button>
-
                 <button class="btn-stop" v-else @click="stopBroadcast">
                     <svg viewBox="0 0 24 24" width="16" height="16" fill="currentColor">
                         <rect x="6" y="6" width="12" height="12" rx="2" />
@@ -519,19 +561,16 @@ onUnmounted(() => {
                     <b>💡 共享技巧</b><br>
                     · 弹窗中选「<b>整个屏幕</b>」<br>
                     · 勾选左下角「<b>分享系统音频</b>」<br>
-                    · macOS 需安装 BlackHole 才能捕获系统声
+                    · 想双向语音，请勾上两个开关<br>
+                    · <b>强烈建议戴耳机</b>
                 </div>
 
                 <div class="err" v-if="live && !hasAudio">
                     <b>⚠️ 未捕获到系统声音</b><br>
-                    请点击「停止共享」，重新共享时：
-                    选「整个屏幕」并勾选「分享系统音频」
+                    停止后重新共享，选「整个屏幕」+「分享系统音频」
                 </div>
 
-                <div class="err" v-if="errorMsg && !live">
-                    {{ errorMsg }}
-                </div>
-
+                <div class="err" v-if="errorMsg && !live">{{ errorMsg }}</div>
             </aside>
         </main>
     </div>
@@ -540,7 +579,6 @@ onUnmounted(() => {
 <style scoped>
 .app {
     --bg: #0a0b0f;
-    --bg-2: #12141a;
     --panel: rgba(255, 255, 255, 0.035);
     --panel-2: rgba(255, 255, 255, 0.06);
     --line: rgba(255, 255, 255, 0.08);
@@ -552,7 +590,6 @@ onUnmounted(() => {
     --ok: #22c55e;
     --danger: #ff4d6d;
     --warn: #f59e0b;
-
     height: 100%;
     display: flex;
     flex-direction: column;
@@ -566,7 +603,6 @@ onUnmounted(() => {
     font-size: 14px;
     overflow: hidden;
     user-select: none;
-    -webkit-font-smoothing: antialiased;
 }
 
 button {
@@ -581,7 +617,6 @@ input {
     font-family: inherit;
 }
 
-/* ============ 顶栏 ============ */
 .topbar {
     flex: none;
     height: 56px;
@@ -591,7 +626,6 @@ input {
     padding: 0 18px;
     background: rgba(10, 11, 15, 0.6);
     backdrop-filter: blur(20px);
-    -webkit-backdrop-filter: blur(20px);
     border-bottom: 1px solid var(--line);
 }
 
@@ -622,7 +656,6 @@ input {
 .brand-text strong {
     font-size: 14px;
     font-weight: 700;
-    letter-spacing: -0.01em;
 }
 
 .brand-text span {
@@ -648,12 +681,12 @@ input {
     border-radius: 50%;
     background: #475569;
     flex: none;
+    display: inline-block;
 }
 
 .dot.ok {
     background: var(--ok);
     box-shadow: 0 0 8px var(--ok);
-    animation: pulse 2s infinite;
 }
 
 .dot.warn {
@@ -666,15 +699,49 @@ input {
     box-shadow: 0 0 8px var(--danger);
 }
 
-@keyframes pulse {
+.voice-status {
+    display: inline-flex;
+    align-items: center;
+    gap: 8px;
+    padding: 6px 12px;
+    border-radius: 999px;
+    background: var(--panel);
+    border: 1px solid var(--line);
+    font-size: 12px;
+    color: var(--fg-2);
+    transition: all 0.3s;
+}
+
+.voice-status.active {
+    background: rgba(34, 197, 94, 0.12);
+    border-color: rgba(34, 197, 94, 0.3);
+    color: #86efac;
+}
+
+.voice-dot {
+    width: 8px;
+    height: 8px;
+    border-radius: 50%;
+    background: #475569;
+}
+
+.voice-status.active .voice-dot {
+    background: var(--ok);
+    box-shadow: 0 0 8px var(--ok);
+    animation: voicePulse 0.8s ease-in-out infinite;
+}
+
+@keyframes voicePulse {
 
     0%,
     100% {
+        transform: scale(1);
         opacity: 1;
     }
 
     50% {
-        opacity: 0.5;
+        transform: scale(1.4);
+        opacity: 0.6;
     }
 }
 
@@ -698,14 +765,12 @@ input {
     color: var(--accent);
 }
 
-/* ============ 主体 ============ */
 .main {
     flex: 1;
     display: flex;
     min-height: 0;
 }
 
-/* 预览区 */
 .preview {
     flex: 1;
     position: relative;
@@ -739,23 +804,10 @@ input {
 .preview-empty .ico {
     font-size: 56px;
     opacity: 0.6;
-    animation: float 3s ease-in-out infinite;
 }
 
 .preview-empty p {
     font-size: 14px;
-}
-
-@keyframes float {
-
-    0%,
-    100% {
-        transform: translateY(0);
-    }
-
-    50% {
-        transform: translateY(-6px);
-    }
 }
 
 .preview-hud {
@@ -769,7 +821,6 @@ input {
     border-radius: 12px;
     background: rgba(0, 0, 0, 0.55);
     backdrop-filter: blur(12px);
-    -webkit-backdrop-filter: blur(12px);
     border: 1px solid rgba(255, 255, 255, 0.08);
 }
 
@@ -801,28 +852,17 @@ input {
     gap: 6px;
 }
 
-/* 右侧面板 */
 .panel {
     width: 340px;
     flex: none;
     border-left: 1px solid var(--line);
     background: rgba(18, 20, 26, 0.6);
     backdrop-filter: blur(20px);
-    -webkit-backdrop-filter: blur(20px);
     padding: 18px;
     display: flex;
     flex-direction: column;
     gap: 14px;
     overflow-y: auto;
-}
-
-.panel::-webkit-scrollbar {
-    width: 6px;
-}
-
-.panel::-webkit-scrollbar-thumb {
-    background: rgba(255, 255, 255, 0.1);
-    border-radius: 3px;
 }
 
 .card {
@@ -852,23 +892,15 @@ input {
     font-size: 14px;
     outline: none;
     width: 100%;
-    transition: border-color 0.2s, background 0.2s;
 }
 
 .card input:focus {
     border-color: var(--accent);
-    background: rgba(124, 107, 255, 0.08);
 }
 
 .card input:disabled {
     opacity: 0.55;
     cursor: not-allowed;
-}
-
-.card .hint {
-    font-size: 11px;
-    color: var(--fg-3);
-    margin-top: -2px;
 }
 
 .share-row {
@@ -891,7 +923,6 @@ input {
     border-radius: 10px;
     font-size: 12px;
     color: var(--fg);
-    transition: all 0.15s;
     white-space: nowrap;
 }
 
@@ -900,27 +931,15 @@ input {
     border-color: var(--accent);
 }
 
-.audio-status {
-    display: flex;
-    align-items: center;
-    gap: 8px;
-    font-size: 13px;
-}
-
 .check-row {
     display: flex;
     align-items: center;
-    gap: 10px;
+    gap: 12px;
     padding: 12px 14px;
     background: var(--panel);
     border: 1px solid var(--line);
     border-radius: 14px;
     cursor: pointer;
-    transition: border-color 0.15s;
-}
-
-.check-row:hover {
-    border-color: rgba(255, 255, 255, 0.16);
 }
 
 .check-row input {
@@ -928,11 +947,25 @@ input {
     height: 16px;
     accent-color: var(--accent);
     cursor: pointer;
+    flex: none;
 }
 
-.check-row span {
+.check-text {
+    flex: 1;
+    display: flex;
+    flex-direction: column;
+    gap: 3px;
+}
+
+.check-text>span:first-child {
     font-size: 13px;
     color: var(--fg);
+}
+
+.check-hint {
+    font-size: 11.5px;
+    color: var(--fg-3);
+    line-height: 1.4;
 }
 
 .btn-main,
@@ -941,8 +974,6 @@ input {
     border-radius: 14px;
     font-size: 14px;
     font-weight: 600;
-    letter-spacing: 0.01em;
-    transition: all 0.15s;
     display: flex;
     align-items: center;
     justify-content: center;
@@ -955,15 +986,6 @@ input {
     box-shadow: 0 12px 30px -8px rgba(124, 107, 255, 0.7);
 }
 
-.btn-main:hover:not(:disabled) {
-    transform: translateY(-1px);
-    box-shadow: 0 16px 36px -8px rgba(124, 107, 255, 0.8);
-}
-
-.btn-main:active:not(:disabled) {
-    transform: translateY(0);
-}
-
 .btn-main:disabled {
     opacity: 0.6;
     cursor: not-allowed;
@@ -974,10 +996,6 @@ input {
     background: rgba(255, 77, 109, 0.12);
     border: 1px solid rgba(255, 77, 109, 0.35);
     color: #ff8ba0;
-}
-
-.btn-stop:hover {
-    background: rgba(255, 77, 109, 0.2);
 }
 
 .tips {

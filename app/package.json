@@ -6,9 +6,28 @@
   "scripts": {
     "dev": "vite",
     "build": "vite build",
-    "preview": "vite preview --host"
+    "preview": "vite preview --host",
+    "cap:init": "cap init",
+    "cap:sync": "npm run build && cap sync",
+    "cap:copy": "npm run build && cap copy",
+    "cap:update": "npm run build && cap sync && cap update",
+    "cap:android": "npm run build && cap sync android && cap open android",
+    "cap:ios": "npm run build && cap sync ios && cap open ios",
+    "cap:android:build": "npm run build && cap sync android && cd android && ./gradlew assembleDebug",
+    "cap:android:release": "npm run build && cap sync android && cd android && ./gradlew assembleRelease",
+    "android": "npm run build && cap sync android && cap open android",
+    "ios": "npm run build && cap sync ios && cap open ios",
+    "run:android": "npm run build && cap run android",
+    "run:ios": "npm run build && cap run ios",
+    "clean": "rm -rf dist node_modules/.vite android/app/build ios/App/build"
   },
   "dependencies": {
+    "@capacitor/android": "^6.0.0",
+    "@capacitor/app": "^6.0.3",
+    "@capacitor/cli": "^6.0.0",
+    "@capacitor/core": "^6.0.0",
+    "@capacitor/screen-orientation": "^6.0.4",
+    "@capacitor/status-bar": "^6.0.3",
     "vue": "^3.4.27",
     "vue-router": "^4.3.2"
   },
