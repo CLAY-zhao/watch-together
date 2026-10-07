@@ -1,14 +1,25 @@
 import { createRouter, createWebHashHistory } from 'vue-router'
-import HomeView from './views/HomeView.vue'
-import BroadcastView from './views/BroadcastView.vue'
+import MainLayout from './views/MainLayout.vue'
+import HomeTab from './views/HomeTab.vue'
+import MemoryTab from './views/MemoryTab.vue'
+import ProfileTab from './views/ProfileTab.vue'
 import WatchView from './views/WatchView.vue'
 
 export default createRouter({
-  // ★ 关键：用 hash 模式，Python 端不用配 SPA fallback
   history: createWebHashHistory(),
   routes: [
-    { path: '/', name: 'home', component: HomeView },
-    { path: '/broadcast', name: 'broadcast', component: BroadcastView },
+    {
+      path: '/',
+      component: MainLayout,
+      children: [
+        { path: '', redirect: '/home' },
+        { path: 'home', name: 'home', component: HomeTab },
+        { path: 'memory', name: 'memory', component: MemoryTab },
+        { path: 'profile', name: 'profile', component: ProfileTab },
+      ],
+    },
     { path: '/watch', name: 'watch', component: WatchView },
+    // 兜底
+    { path: '/:pathMatch(.*)*', redirect: '/home' },
   ],
 })

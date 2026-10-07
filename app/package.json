@@ -19,14 +19,21 @@
     "ios": "npm run build && cap sync ios && cap open ios",
     "run:android": "npm run build && cap run android",
     "run:ios": "npm run build && cap run ios",
-    "clean": "rm -rf dist node_modules/.vite android/app/build ios/App/build"
+    "clean": "rm -rf dist node_modules/.vite android/app/build ios/App/build",
+    "version:sync": "node scripts/sync-version.mjs",
+    "release": "node scripts/release.mjs",
+    "release:patch": "node scripts/release.mjs patch",
+    "release:minor": "node scripts/release.mjs minor",
+    "release:major": "node scripts/release.mjs major"
   },
   "dependencies": {
     "@anuradev/capacitor-background-mode": "^6.0.0",
+    "@capacitor-community/file-opener": "^6.0.1",
     "@capacitor/android": "^6.0.0",
     "@capacitor/app": "^6.0.3",
     "@capacitor/cli": "^6.0.0",
     "@capacitor/core": "^6.0.0",
+    "@capacitor/filesystem": "^6.0.4",
     "@capacitor/screen-orientation": "^6.0.4",
     "@capacitor/status-bar": "^6.0.3",
     "@capawesome-team/capacitor-android-foreground-service": "^6.2.0",

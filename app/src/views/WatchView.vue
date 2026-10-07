@@ -6,6 +6,7 @@ import { getWsBase } from '@/config/backend'
 import { Capacitor } from '@capacitor/core'
 import { StatusBar } from '@capacitor/status-bar'
 import { App as CapApp } from '@capacitor/app'
+import { addHistory, updateHistoryDuration } from '@/utils/watchHistory'
 
 const route = useRoute()
 const router = useRouter()
@@ -51,7 +52,7 @@ const isFullscreen = ref(false)
 const needsTapToPlay = ref(false)
 const showVolumeBubble = ref(false)
 
-/* ★ 语音音量（独立于影片音量） */
+/* 语音音量（独立于影片） */
 const voiceVolume = ref(1)
 const hasVoiceAudio = ref(false)
 let voiceAudioEl = null
@@ -68,11 +69,25 @@ const chatInput = ref('')
 const chatMessages = ref([])
 const chatUnread = ref(0)
 
-/* ★ 新消息提示音 */
-const chatSoundEnabled = ref(true)
-let chatNotifAudioCtx = null
+/* ★ 设置抽屉 */
+const showSettings = ref(false)
+
+/* ★ 用户偏好设置（持久化） */
+const autoDuckVolume = ref(localStorage.getItem('wt:autoDuck') === '1')     // 语音时自动降低影片音量
+const keepScreenOn = ref(localStorage.getItem('wt:keepScreenOn') !== '0')   // 默认开启
+const autoHideControls = ref(localStorage.getItem('wt:autoHideControls') !== '0') // 默认开启
+const fullscreenFit = ref(localStorage.getItem('wt:fullscreenFit') || 'cover-bottom') // 填充模式
+
+/* 自动降音状态 */
+let duckOriginalVolume = null  // 降音前的音量
+let duckTimer = null
 
 let lastEmotion = { emoji: '', ts: 0, combo: 0 }
+
+/* ★ 观影记录 */
+let currentSessionId = null
+let sessionStartTime = 0
+let durationTimer = null
 
 const videoEl = ref(null)
 const stageEl = ref(null)
@@ -150,6 +165,13 @@ const volumeIcon = computed(() => {
     if (volume.value < 0.5) return 'low'
     return 'high'
 })
+
+const FIT_LABELS = {
+    'cover-bottom': '保字幕',
+    'cover-center': '居中',
+    'cover-top': '保顶部',
+    'contain': '完整',
+}
 
 /* ============================================================
  *  工具
@@ -249,7 +271,7 @@ function toggleMute() {
 }
 
 /* ============================================================
- *  ★ 语音音量（独立）
+ *  语音音量（独立）
  * ============================================================ */
 function ensureVoiceAudioEl() {
     if (voiceAudioEl) return voiceAudioEl
@@ -285,8 +307,67 @@ function setVoiceVolume(v) {
 }
 
 /* ============================================================
- *  ★ 新消息提示音
+ *  ★ 自动降音：语音说话时降低影片音量
  * ============================================================ */
+function startAutoDuck() {
+    stopAutoDuck()
+    // 只监听对方（投屏端）是否在说话 —— 用 broadcasterVoiceActive
+    // 但这里我们先监听本地的 micLevel（自己说话时，也会降影片音量方便听对方）
+    // 更通用的做法是：只要任一方在说话就降
+}
+
+function stopAutoDuck() {
+    if (duckTimer) { clearTimeout(duckTimer); duckTimer = null }
+    if (duckOriginalVolume !== null) {
+        setVolume(duckOriginalVolume)
+        duckOriginalVolume = null
+    }
+}
+
+function checkDuck(level) {
+    if (!autoDuckVolume.value) {
+        // 关掉开关时，恢复音量
+        if (duckOriginalVolume !== null) {
+            stopAutoDuck()
+        }
+        return
+    }
+
+    const TALK_THRESHOLD = 10   // 电平阈值
+    const DUCK_RATIO = 0.25     // 降到原来的 25%
+
+    if (level > TALK_THRESHOLD) {
+        // 有人说话 → 降音
+        if (duckOriginalVolume === null) {
+            duckOriginalVolume = volume.value
+        }
+        if (duckTimer) { clearTimeout(duckTimer); duckTimer = null }
+        const target = duckOriginalVolume * DUCK_RATIO
+        const v = getVideo()
+        if (v) {
+            v.volume = target
+            volume.value = target
+        }
+    } else {
+        // 安静 → 0.8 秒后恢复
+        if (duckOriginalVolume !== null && !duckTimer) {
+            duckTimer = setTimeout(() => {
+                if (duckOriginalVolume !== null) {
+                    setVolume(duckOriginalVolume)
+                    duckOriginalVolume = null
+                }
+                duckTimer = null
+            }, 800)
+        }
+    }
+}
+
+/* ============================================================
+ *  聊天
+ * ============================================================ */
+const chatSoundEnabled = ref(true)
+let chatNotifAudioCtx = null
+
 function playChatNotifSound() {
     if (!chatSoundEnabled.value) return
     try {
@@ -295,20 +376,17 @@ function playChatNotifSound() {
             if (!AC) return
             chatNotifAudioCtx = new AC()
         }
-        if (chatNotifAudioCtx.state === 'suspended') {
-            chatNotifAudioCtx.resume()
-        }
+        if (chatNotifAudioCtx.state === 'suspended') chatNotifAudioCtx.resume()
 
         const ctx = chatNotifAudioCtx
         const now = ctx.currentTime
 
-        // C6 → G6 短促上升音，跟电脑端的"叮"区分
         const osc = ctx.createOscillator()
         const gain = ctx.createGain()
 
         osc.type = 'sine'
-        osc.frequency.setValueAtTime(1046.5, now)          // C6
-        osc.frequency.exponentialRampToValueAtTime(1568, now + 0.08)  // G6
+        osc.frequency.setValueAtTime(1046.5, now)
+        osc.frequency.exponentialRampToValueAtTime(1568, now + 0.08)
 
         gain.gain.setValueAtTime(0, now)
         gain.gain.linearRampToValueAtTime(0.15, now + 0.01)
@@ -319,24 +397,18 @@ function playChatNotifSound() {
         osc.start(now)
         osc.stop(now + 0.28)
     } catch (e) {
-        console.warn('[chat-notif] 音效播放失败:', e)
+        console.warn('[chat-notif]', e)
     }
 }
 
-/* ============================================================
- *  聊天
- * ============================================================ */
 function addChatMessage(msg) {
     chatMessages.value.push(msg)
     while (chatMessages.value.length > 100) {
         chatMessages.value.shift()
     }
-
-    /* ★ 收到对方消息时播放提示音（自己发的不响） */
     if (msg.from !== 'me') {
         playChatNotifSound()
     }
-
     nextTick(() => {
         const el = document.querySelector('.chat-list')
         if (el) el.scrollTop = el.scrollHeight
@@ -511,7 +583,12 @@ function startMicMeter(stream) {
             micAnalyser.getByteFrequencyData(buf)
             let sum = 0
             for (let i = 0; i < buf.length; i++) sum += buf[i]
-            micLevel.value = Math.min(100, Math.round((sum / buf.length) * 2.4))
+            const level = Math.min(100, Math.round((sum / buf.length) * 2.4))
+            micLevel.value = level
+
+            /* ★ 自动降音检查 */
+            checkDuck(level)
+
             micRaf = requestAnimationFrame(tick)
         }
         tick()
@@ -523,6 +600,7 @@ function stopMicMeter() {
     micAnalyser = null
     if (micAudioCtx) { try { micAudioCtx.close() } catch (e) { } micAudioCtx = null }
     micLevel.value = 0
+    stopAutoDuck()
 }
 
 async function handleVoiceAnswer(sdp) {
@@ -604,13 +682,15 @@ function onTouchEnd(e) {
 function scheduleHideControls() {
     clearTimeout(hideTimer)
     if (!playing.value) return
+    if (!autoHideControls.value) return    // ★ 用户关了自动隐藏
     hideTimer = setTimeout(() => { showControls.value = false }, 3000)
 }
 
 /* ============================================================
- *  WakeLock
+ *  WakeLock（屏幕常亮）
  * ============================================================ */
 async function requestWakeLock() {
+    if (!keepScreenOn.value) return   // ★ 用户关了
     try {
         if ('wakeLock' in navigator) {
             wakeLock = await navigator.wakeLock.request('screen')
@@ -622,6 +702,32 @@ async function requestWakeLock() {
 function releaseWakeLock() {
     if (wakeLock) { try { wakeLock.release() } catch (e) { } wakeLock = null }
 }
+
+/* ============================================================
+ *  设置持久化
+ * ============================================================ */
+function saveBool(key, val) {
+    localStorage.setItem(key, val ? '1' : '0')
+}
+
+watch(autoDuckVolume, (v) => {
+    saveBool('wt:autoDuck', v)
+    if (!v) stopAutoDuck()  // 关闭时恢复音量
+})
+
+watch(keepScreenOn, (v) => {
+    saveBool('wt:keepScreenOn', v)
+    if (v && playing.value) requestWakeLock()
+    else if (!v) releaseWakeLock()
+})
+
+watch(autoHideControls, (v) => {
+    saveBool('wt:autoHideControls', v)
+})
+
+watch(fullscreenFit, (v) => {
+    localStorage.setItem('wt:fullscreenFit', v)
+})
 
 /* ============================================================
  *  全屏
@@ -708,7 +814,7 @@ function stopPing() {
 }
 
 /* ============================================================
- *  WebRTC —— ★ 关键：区分语音和电影音频
+ *  WebRTC
  * ============================================================ */
 function createPeerConnection() {
     const p = new RTCPeerConnection({
@@ -720,11 +826,9 @@ function createPeerConnection() {
     p.ontrack = event => {
         const stream = (event.streams && event.streams[0]) || null
 
-        /* ---- 视频轨道 ---- */
         if (event.track.kind === 'video') {
             const v = getVideo()
             if (!v) return
-
             try {
                 const receiver = p.getReceivers().find(r => r.track === event.track)
                 if (receiver && 'playoutDelayHint' in receiver) {
@@ -744,13 +848,11 @@ function createPeerConnection() {
             return
         }
 
-        /* ---- 音频轨道：区分电影音频 / 语音 ---- */
         if (event.track.kind === 'audio') {
             const isVoice = stream && remoteMicStreamId && stream.id === remoteMicStreamId
 
             if (isVoice) {
-                /* 语音 → 独立 audio 元素 */
-                console.log('[voice-audio] 收到语音轨，路由到独立播放器')
+                console.log('[voice-audio] 语音轨 → 独立播放器')
                 const el = ensureVoiceAudioEl()
                 el.srcObject = new MediaStream([event.track])
                 el.volume = voiceVolume.value
@@ -764,8 +866,6 @@ function createPeerConnection() {
                         hasVoiceAudio.value = true
                     })
             } else {
-                /* 电影音频 → 合并到视频元素 */
-                console.log('[video-audio] 电影音频轨道 → video 元素')
                 const v = getVideo()
                 if (!v) return
                 if (stream) {
@@ -848,6 +948,7 @@ function cleanup() {
     stopMic()
     destroyVoiceAudioEl()
     releaseWakeLock()
+    stopAutoDuck()
 }
 
 function scheduleReconnect() {
@@ -891,14 +992,12 @@ function joinInternal(room) {
         try { msg = JSON.parse(event.data) } catch (e) { return }
         const channel = msg.channel || 'video'
 
-        /* ★ 麦克风流 ID */
         if (msg.type === 'stream-info') {
             remoteMicStreamId = msg.micStreamId
             console.log('[voice-audio] mic stream id =', remoteMicStreamId)
             return
         }
 
-        /* 聊天 */
         if (msg.type === 'chat' && channel === 'chat') {
             addChatMessage({
                 id: Date.now() + Math.random(),
@@ -931,6 +1030,20 @@ function joinInternal(room) {
 
 async function join(room) {
     if (!room) return
+
+    /* ★ 记录观影开始 */
+    currentSessionId = addHistory({ room })
+    sessionStartTime = Date.now()
+
+    // 每 60 秒保存一次时长
+    clearInterval(durationTimer)
+    durationTimer = setInterval(() => {
+        if (currentSessionId && sessionStartTime) {
+            const seconds = Math.floor((Date.now() - sessionStartTime) / 1000)
+            updateHistoryDuration(currentSessionId, seconds)
+        }
+    }, 60000)
+
     currentRoom = room
     intentionalClose = false
     reconnectAttempts = 0
@@ -982,6 +1095,30 @@ function pickRoom() {
     return localStorage.getItem('wt:last-room') || ''
 }
 
+/* ============================================================
+ *  设置抽屉
+ * ============================================================ */
+function openSettings() {
+    showSettings.value = true
+}
+
+function closeSettings() {
+    showSettings.value = false
+}
+
+/* 重置所有设置为默认 */
+function resetSettings() {
+    autoDuckVolume.value = false
+    keepScreenOn.value = true
+    autoHideControls.value = true
+    fullscreenFit.value = 'cover-bottom'
+    volume.value = 1
+    voiceVolume.value = 1
+    chatSoundEnabled.value = true
+    setVolume(1)
+    setVoiceVolume(1)
+}
+
 watch(playing, (isPlaying) => {
     if (isPlaying) {
         requestWakeLock()
@@ -996,7 +1133,7 @@ watch(playing, (isPlaying) => {
 onMounted(async () => {
     placeholderImage.value = pickPlaceholder()
 
-    /* 恢复音量偏好 */
+    /* 恢复偏好 */
     const savedVol = localStorage.getItem('wt:volume')
     if (savedVol !== null) {
         const v = parseFloat(savedVol)
@@ -1020,6 +1157,7 @@ onMounted(async () => {
     if (isNative) {
         try {
             backListener = await CapApp.addListener('backButton', ({ canGoBack }) => {
+                if (showSettings.value) { closeSettings(); return }
                 if (showChat.value) { showChat.value = false; return }
                 if (isFullscreen.value) exitFullscreen()
                 else if (canGoBack) router.back()
@@ -1047,7 +1185,13 @@ onUnmounted(async () => {
 </script>
 
 <template>
-    <div class="watch" :class="{ 'is-fullscreen': isFullscreen }">
+    <div class="watch" :class="{
+        'is-fullscreen': isFullscreen,
+        'fit-cover-bottom': fullscreenFit === 'cover-bottom',
+        'fit-cover-center': fullscreenFit === 'cover-center',
+        'fit-cover-top': fullscreenFit === 'cover-top',
+        'fit-contain': fullscreenFit === 'contain',
+    }">
 
         <!-- ============ 视频舞台 ============ -->
         <div ref="stageEl" class="stage" @touchstart.passive="onTouchStart" @touchmove="onTouchMove"
@@ -1178,6 +1322,15 @@ onUnmounted(async () => {
                         </span>
                     </button>
 
+                    <button class="iconbtn" @click.stop="openSettings">
+                        <svg viewBox="0 0 24 24" width="18" height="18" fill="none" stroke="currentColor"
+                            stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+                            <circle cx="12" cy="12" r="3" />
+                            <path
+                                d="M19.4 15a1.65 1.65 0 0 0 .33 1.82l.06.06a2 2 0 0 1-2.83 2.83l-.06-.06a1.65 1.65 0 0 0-1.82-.33 1.65 1.65 0 0 0-1 1.51V21a2 2 0 0 1-4 0v-.09a1.65 1.65 0 0 0-1-1.51 1.65 1.65 0 0 0-1.82.33l-.06.06a2 2 0 0 1-2.83-2.83l.06-.06a1.65 1.65 0 0 0 .33-1.82 1.65 1.65 0 0 0-1.51-1H3a2 2 0 0 1 0-4h.09a1.65 1.65 0 0 0 1.51-1 1.65 1.65 0 0 0-.33-1.82l-.06-.06a2 2 0 0 1 2.83-2.83l.06.06a1.65 1.65 0 0 0 1.82.33h.01A1.65 1.65 0 0 0 9 3.09V3a2 2 0 0 1 4 0v.09a1.65 1.65 0 0 0 1 1.51 1.65 1.65 0 0 0 1.82-.33l.06-.06a2 2 0 0 1 2.83 2.83l-.06.06a1.65 1.65 0 0 0-.33 1.82v.01a1.65 1.65 0 0 0 1.51 1H21a2 2 0 0 1 0 4h-.09a1.65 1.65 0 0 0-1.51 1z" />
+                        </svg>
+                    </button>
+
                     <button class="iconbtn" @click.stop="toggleFullscreen">
                         <svg viewBox="0 0 24 24" width="18" height="18" fill="none" stroke="currentColor"
                             stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
@@ -1255,6 +1408,18 @@ onUnmounted(async () => {
                 <span class="tool__label">全屏</span>
             </button>
 
+            <button class="tool" :class="{ 'tool--active': showSettings }" @click="openSettings">
+                <div class="tool__icon">
+                    <svg viewBox="0 0 24 24" width="22" height="22" fill="none" stroke="currentColor" stroke-width="2"
+                        stroke-linecap="round" stroke-linejoin="round">
+                        <circle cx="12" cy="12" r="3" />
+                        <path
+                            d="M19.4 15a1.65 1.65 0 0 0 .33 1.82l.06.06a2 2 0 0 1-2.83 2.83l-.06-.06a1.65 1.65 0 0 0-1.82-.33 1.65 1.65 0 0 0-1 1.51V21a2 2 0 0 1-4 0v-.09a1.65 1.65 0 0 0-1-1.51 1.65 1.65 0 0 0-1.82.33l-.06.06a2 2 0 0 1-2.83-2.83l.06-.06a1.65 1.65 0 0 0 .33-1.82 1.65 1.65 0 0 0-1.51-1H3a2 2 0 0 1 0-4h.09a1.65 1.65 0 0 0 1.51-1 1.65 1.65 0 0 0-.33-1.82l-.06-.06a2 2 0 0 1 2.83-2.83l.06.06a1.65 1.65 0 0 0 1.82.33h.01A1.65 1.65 0 0 0 9 3.09V3a2 2 0 0 1 4 0v.09a1.65 1.65 0 0 0 1 1.51 1.65 1.65 0 0 0 1.82-.33l.06-.06a2 2 0 0 1 2.83 2.83l-.06.06a1.65 1.65 0 0 0-.33 1.82v.01a1.65 1.65 0 0 0 1.51 1H21a2 2 0 0 1 0 4h-.09a1.65 1.65 0 0 0-1.51 1z" />
+                    </svg>
+                </div>
+                <span class="tool__label">设置</span>
+            </button>
+
             <button class="tool" @click="goBack">
                 <div class="tool__icon">
                     <svg viewBox="0 0 24 24" width="22" height="22" fill="none" stroke="currentColor" stroke-width="2"
@@ -1266,7 +1431,145 @@ onUnmounted(async () => {
             </button>
         </div>
 
-        <!-- ============ 聊天抽屉 ============ -->
+        <!-- ============ ★ 设置抽屉 ============ -->
+        <transition name="chat-drawer">
+            <div v-if="showSettings && !isFullscreen" class="settings-drawer">
+                <div class="settings-drawer__handle"></div>
+
+                <div class="settings-drawer__header">
+                    <div class="settings-drawer__title">
+                        <svg viewBox="0 0 24 24" width="18" height="18" fill="none" stroke="currentColor"
+                            stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+                            <circle cx="12" cy="12" r="3" />
+                            <path
+                                d="M19.4 15a1.65 1.65 0 0 0 .33 1.82l.06.06a2 2 0 0 1-2.83 2.83l-.06-.06a1.65 1.65 0 0 0-1.82-.33 1.65 1.65 0 0 0-1 1.51V21a2 2 0 0 1-4 0v-.09a1.65 1.65 0 0 0-1-1.51 1.65 1.65 0 0 0-1.82.33l-.06.06a2 2 0 0 1-2.83-2.83l.06-.06a1.65 1.65 0 0 0 .33-1.82 1.65 1.65 0 0 0-1.51-1H3a2 2 0 0 1 0-4h.09a1.65 1.65 0 0 0 1.51-1 1.65 1.65 0 0 0-.33-1.82l-.06-.06a2 2 0 0 1 2.83-2.83l.06.06a1.65 1.65 0 0 0 1.82.33h.01A1.65 1.65 0 0 0 9 3.09V3a2 2 0 0 1 4 0v.09a1.65 1.65 0 0 0 1 1.51 1.65 1.65 0 0 0 1.82-.33l.06-.06a2 2 0 0 1 2.83 2.83l-.06.06a1.65 1.65 0 0 0-.33 1.82v.01a1.65 1.65 0 0 0 1.51 1H21a2 2 0 0 1 0 4h-.09a1.65 1.65 0 0 0-1.51 1z" />
+                        </svg>
+                        设置
+                    </div>
+                    <button class="settings-drawer__close" @click="closeSettings">
+                        <svg viewBox="0 0 24 24" width="18" height="18" fill="none" stroke="currentColor"
+                            stroke-width="2.4" stroke-linecap="round" stroke-linejoin="round">
+                            <path d="M18 6L6 18M6 6l12 12" />
+                        </svg>
+                    </button>
+                </div>
+
+                <div class="settings-drawer__body">
+
+                    <!-- 画面 -->
+                    <section class="settings-section">
+                        <div class="settings-section__head">
+                            <svg viewBox="0 0 24 24" width="14" height="14" fill="none" stroke="currentColor"
+                                stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+                                <rect x="3" y="4" width="18" height="14" rx="2" />
+                                <line x1="8" y1="21" x2="16" y2="21" />
+                                <line x1="12" y1="18" x2="12" y2="21" />
+                            </svg>
+                            <span>画面</span>
+                        </div>
+
+                        <div class="settings-row">
+                            <span class="settings-row__label">填充模式</span>
+                            <div class="settings-segmented">
+                                <button v-for="(label, k) in FIT_LABELS" :key="k" class="settings-segmented__item"
+                                    :class="{ 'is-active': fullscreenFit === k }" @click="fullscreenFit = k">
+                                    {{ label }}
+                                </button>
+                            </div>
+                        </div>
+                    </section>
+
+                    <!-- 声音 -->
+                    <section class="settings-section">
+                        <div class="settings-section__head">
+                            <svg viewBox="0 0 24 24" width="14" height="14" fill="none" stroke="currentColor"
+                                stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+                                <path d="M11 5 6 9H2v6h4l5 4V5z" />
+                                <path d="M15.5 8.5a5 5 0 0 1 0 7" />
+                                <path d="M19 5a9 9 0 0 1 0 14" />
+                            </svg>
+                            <span>声音</span>
+                        </div>
+
+                        <div class="settings-slider">
+                            <div class="settings-slider__head">
+                                <span class="settings-slider__label">影片音量</span>
+                                <span class="settings-slider__value">{{ Math.round(volume * 100) }}%</span>
+                            </div>
+                            <input type="range" min="0" max="1" step="0.01" :value="volume"
+                                @input="e => setVolume(parseFloat(e.target.value))" class="settings-slider__input" />
+                        </div>
+
+                        <div class="settings-slider">
+                            <div class="settings-slider__head">
+                                <span class="settings-slider__label">语音音量</span>
+                                <span class="settings-slider__value">{{ Math.round(voiceVolume * 100) }}%</span>
+                            </div>
+                            <input type="range" min="0" max="1" step="0.01" :value="voiceVolume"
+                                @input="e => setVoiceVolume(parseFloat(e.target.value))"
+                                class="settings-slider__input" />
+                        </div>
+
+                        <label class="settings-toggle">
+                            <input type="checkbox" v-model="autoDuckVolume" />
+                            <div class="settings-toggle__text">
+                                <span class="settings-toggle__title">语音时自动降低影片音量</span>
+                                <span class="settings-toggle__sub">有人说话时电影自动变小，说完自动恢复</span>
+                            </div>
+                        </label>
+
+                        <label class="settings-toggle">
+                            <input type="checkbox" v-model="chatSoundEnabled" />
+                            <div class="settings-toggle__text">
+                                <span class="settings-toggle__title">新消息提示音</span>
+                                <span class="settings-toggle__sub">收到对方聊天消息时播放提示音</span>
+                            </div>
+                        </label>
+                    </section>
+
+                    <!-- 显示 -->
+                    <section class="settings-section">
+                        <div class="settings-section__head">
+                            <svg viewBox="0 0 24 24" width="14" height="14" fill="none" stroke="currentColor"
+                                stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+                                <rect x="5" y="2" width="14" height="20" rx="2" ry="2" />
+                                <line x1="12" y1="18" x2="12.01" y2="18" />
+                            </svg>
+                            <span>显示</span>
+                        </div>
+
+                        <label class="settings-toggle">
+                            <input type="checkbox" v-model="keepScreenOn" />
+                            <div class="settings-toggle__text">
+                                <span class="settings-toggle__title">保持屏幕常亮</span>
+                                <span class="settings-toggle__sub">播放时阻止手机息屏</span>
+                            </div>
+                        </label>
+
+                        <label class="settings-toggle">
+                            <input type="checkbox" v-model="autoHideControls" />
+                            <div class="settings-toggle__text">
+                                <span class="settings-toggle__title">全屏时自动隐藏控制栏</span>
+                                <span class="settings-toggle__sub">3 秒无操作自动隐藏顶栏底栏</span>
+                            </div>
+                        </label>
+                    </section>
+
+                    <!-- 重置 -->
+                    <button class="settings-reset" @click="resetSettings">
+                        <svg viewBox="0 0 24 24" width="14" height="14" fill="none" stroke="currentColor"
+                            stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+                            <polyline points="1 4 1 10 7 10" />
+                            <path d="M3.51 15a9 9 0 1 0 2.13-9.36L1 10" />
+                        </svg>
+                        恢复默认设置
+                    </button>
+
+                </div>
+            </div>
+        </transition>
+
+        <!-- 聊天抽屉 -->
         <transition name="chat-drawer">
             <div v-if="showChat && !isFullscreen" class="chat-drawer">
                 <div class="chat-drawer__header">
@@ -1274,25 +1577,6 @@ onUnmounted(async () => {
                         <span class="chat-drawer__dot"></span>
                         聊天
                     </div>
-
-                    <!-- ★ 提示音开关 -->
-                    <button class="chat-drawer__sound" :class="{ 'is-on': chatSoundEnabled }"
-                        @click="chatSoundEnabled = !chatSoundEnabled"
-                        :aria-label="chatSoundEnabled ? '关闭提示音' : '开启提示音'">
-                        <svg v-if="chatSoundEnabled" viewBox="0 0 24 24" width="16" height="16" fill="none"
-                            stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
-                            <path d="M11 5L6 9H2v6h4l5 4V5z" />
-                            <path d="M15.5 8.5a5 5 0 0 1 0 7" />
-                            <path d="M19 5a9 9 0 0 1 0 14" />
-                        </svg>
-                        <svg v-else viewBox="0 0 24 24" width="16" height="16" fill="none" stroke="currentColor"
-                            stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
-                            <path d="M11 5L6 9H2v6h4l5 4V5z" />
-                            <path d="m23 9-6 6M17 9l6 6" />
-                        </svg>
-                        <span class="chat-drawer__sound-text">{{ chatSoundEnabled ? '提示音' : '静音' }}</span>
-                    </button>
-
                     <button class="chat-drawer__close" @click="showChat = false">
                         <svg viewBox="0 0 24 24" width="18" height="18" fill="none" stroke="currentColor"
                             stroke-width="2.4" stroke-linecap="round" stroke-linejoin="round">
@@ -1333,9 +1617,9 @@ onUnmounted(async () => {
             </div>
         </transition>
 
-        <!-- ============ 情绪弹幕条 ============ -->
+        <!-- 情绪弹幕条 -->
         <transition name="slide-up">
-            <div v-if="!isFullscreen && joined && hasMedia && !showChat" class="emotion-bar">
+            <div v-if="!isFullscreen && joined && hasMedia && !showChat && !showSettings" class="emotion-bar">
                 <div class="emotion-bar__glow"></div>
 
                 <div class="emotion-bar__header">
@@ -1354,9 +1638,9 @@ onUnmounted(async () => {
             </div>
         </transition>
 
-        <!-- ============ 语音浮层 ============ -->
+        <!-- 语音浮层 -->
         <transition name="slide-up">
-            <div v-if="micEnabled && !isFullscreen && !showChat" class="voice-panel">
+            <div v-if="micEnabled && !isFullscreen && !showChat && !showSettings" class="voice-panel">
                 <div class="voice-panel__glow"></div>
 
                 <div class="voice-panel__row">
@@ -1513,7 +1797,6 @@ onUnmounted(async () => {
                     </div>
                 </div>
 
-                <!-- ★ 语音音量卡片 -->
                 <transition name="slide-up">
                     <div v-if="hasVoiceAudio" class="voice-volume-card">
                         <div class="voice-volume-card__header">
@@ -1589,7 +1872,7 @@ onUnmounted(async () => {
                                 <rect x="9" y="3" width="6" height="12" rx="3" />
                                 <path d="M5 11a7 7 0 0 0 14 0" />
                             </svg>
-                            上方滑块<b>单独调语音</b>大小
+                            点<b>语音</b>按钮与对方实时对话
                         </li>
                         <li>
                             <svg viewBox="0 0 24 24" width="14" height="14" fill="none" stroke="currentColor"
@@ -1604,7 +1887,7 @@ onUnmounted(async () => {
                                 <path
                                     d="M4 9V5a1 1 0 0 1 1-1h4M20 9V5a1 1 0 0 0-1-1h-4M4 15v4a1 1 0 0 0 1 1h4M20 15v4a1 1 0 0 1-1 1h-4" />
                             </svg>
-                            点<b>全屏</b>进入沉浸观影
+                            点<b>设置</b>可以调填充模式、音量、常亮等
                         </li>
                         <li>
                             <svg viewBox="0 0 24 24" width="14" height="14" fill="none" stroke="currentColor"
@@ -1623,6 +1906,9 @@ onUnmounted(async () => {
 </template>
 
 <style scoped>
+/* ============================================================
+ *  基础
+ * ============================================================ */
 .watch {
     position: relative;
     width: 100%;
@@ -1651,6 +1937,7 @@ onUnmounted(async () => {
     scrollbar-width: none;
 }
 
+/* ============ 视频舞台 ============ */
 .stage {
     position: relative;
     width: 100%;
@@ -1935,6 +2222,7 @@ onUnmounted(async () => {
     line-height: 1;
 }
 
+/* ============ 顶栏 ============ */
 .topbar {
     position: absolute;
     top: 0;
@@ -2017,6 +2305,7 @@ onUnmounted(async () => {
     }
 }
 
+/* ============ 底栏 ============ */
 .bottombar {
     position: absolute;
     left: 0;
@@ -2149,13 +2438,14 @@ onUnmounted(async () => {
     z-index: 1;
 }
 
+/* ============ 工具栏 ============ */
 .toolbar {
     position: relative;
     flex: none;
     display: flex;
     align-items: stretch;
-    gap: 4px;
-    padding: 14px 10px;
+    gap: 3px;
+    padding: 14px 8px;
     background: rgba(10, 13, 18, 0.85);
     backdrop-filter: blur(20px);
     -webkit-backdrop-filter: blur(20px);
@@ -2177,7 +2467,7 @@ onUnmounted(async () => {
     display: flex;
     flex-direction: column;
     align-items: center;
-    gap: 6px;
+    gap: 5px;
     padding: 10px 2px;
     background: transparent;
     border: none;
@@ -2203,11 +2493,11 @@ onUnmounted(async () => {
 
 .tool__icon {
     position: relative;
-    width: 40px;
-    height: 40px;
+    width: 38px;
+    height: 38px;
     display: grid;
     place-items: center;
-    border-radius: 13px;
+    border-radius: 12px;
     background: rgba(255, 255, 255, 0.045);
     border: 1px solid rgba(255, 255, 255, 0.08);
     transition: background 0.15s, border-color 0.2s, color 0.2s, box-shadow 0.2s;
@@ -2257,19 +2547,329 @@ onUnmounted(async () => {
 .mic-halo {
     position: absolute;
     inset: 0;
-    border-radius: 13px;
+    border-radius: 12px;
     background: radial-gradient(circle, rgba(124, 107, 255, 0.7) 0%, transparent 70%);
     pointer-events: none;
     transition: transform 0.06s linear, opacity 0.06s linear;
 }
 
 .tool__label {
-    font-size: 11px;
+    font-size: 10.5px;
     font-weight: 600;
     letter-spacing: 0.02em;
 }
 
-/* 聊天抽屉 */
+/* ============================================================
+ *  ★ 设置抽屉
+ * ============================================================ */
+.settings-drawer {
+    position: fixed;
+    bottom: 0;
+    left: 0;
+    right: 0;
+    z-index: 110;
+    max-height: 78vh;
+    display: flex;
+    flex-direction: column;
+    background: rgba(12, 15, 22, 0.98);
+    backdrop-filter: blur(28px);
+    -webkit-backdrop-filter: blur(28px);
+    border-top-left-radius: 24px;
+    border-top-right-radius: 24px;
+    border-top: 1px solid rgba(124, 107, 255, 0.3);
+    box-shadow:
+        0 -20px 60px -10px rgba(0, 0, 0, 0.9),
+        0 -1px 0 rgba(255, 255, 255, 0.06) inset;
+    padding-bottom: env(safe-area-inset-bottom, 0px);
+    overflow: hidden;
+}
+
+.settings-drawer__handle {
+    position: absolute;
+    top: 8px;
+    left: 50%;
+    transform: translateX(-50%);
+    width: 40px;
+    height: 4px;
+    border-radius: 2px;
+    background: rgba(255, 255, 255, 0.15);
+}
+
+.settings-drawer__header {
+    flex: none;
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    padding: 22px 20px 12px;
+    border-bottom: 1px solid rgba(255, 255, 255, 0.06);
+}
+
+.settings-drawer__title {
+    display: inline-flex;
+    align-items: center;
+    gap: 8px;
+    font-size: 15px;
+    font-weight: 700;
+    color: #f1f5f9;
+}
+
+.settings-drawer__title svg {
+    color: #7c6bff;
+}
+
+.settings-drawer__close {
+    width: 34px;
+    height: 34px;
+    display: grid;
+    place-items: center;
+    border-radius: 50%;
+    background: rgba(255, 255, 255, 0.06);
+    border: 1px solid rgba(255, 255, 255, 0.08);
+    color: #94a3b8;
+    cursor: pointer;
+    transition: all 0.15s;
+}
+
+.settings-drawer__close:active {
+    transform: scale(0.92);
+    background: rgba(255, 77, 109, 0.2);
+    color: #ff4d6d;
+}
+
+.settings-drawer__body {
+    flex: 1;
+    min-height: 0;
+    overflow-y: auto;
+    -webkit-overflow-scrolling: touch;
+    padding: 16px 16px 24px;
+    display: flex;
+    flex-direction: column;
+    gap: 20px;
+}
+
+.settings-drawer__body::-webkit-scrollbar {
+    width: 0;
+    display: none;
+}
+
+.settings-drawer__body {
+    scrollbar-width: none;
+}
+
+/* 分组 */
+.settings-section {
+    display: flex;
+    flex-direction: column;
+    gap: 12px;
+}
+
+.settings-section__head {
+    display: inline-flex;
+    align-items: center;
+    gap: 6px;
+    padding: 0 4px;
+    font-size: 11.5px;
+    font-weight: 700;
+    color: #7c6bff;
+    letter-spacing: 0.08em;
+    text-transform: uppercase;
+}
+
+/* 分段选择（填充模式） */
+.settings-row {
+    display: flex;
+    flex-direction: column;
+    gap: 8px;
+    padding: 12px 14px;
+    background: rgba(255, 255, 255, 0.035);
+    border: 1px solid rgba(255, 255, 255, 0.07);
+    border-radius: 14px;
+}
+
+.settings-row__label {
+    font-size: 12.5px;
+    color: #94a3b8;
+    font-weight: 600;
+}
+
+.settings-segmented {
+    display: grid;
+    grid-template-columns: repeat(4, 1fr);
+    gap: 4px;
+    padding: 4px;
+    background: rgba(0, 0, 0, 0.3);
+    border-radius: 10px;
+}
+
+.settings-segmented__item {
+    padding: 8px 6px;
+    border-radius: 7px;
+    background: transparent;
+    border: none;
+    color: #64748b;
+    font-family: inherit;
+    font-size: 11.5px;
+    font-weight: 700;
+    cursor: pointer;
+    transition: all 0.15s;
+}
+
+.settings-segmented__item:active {
+    transform: scale(0.95);
+}
+
+.settings-segmented__item.is-active {
+    background: linear-gradient(135deg, #7c6bff, #4f8cff);
+    color: #fff;
+    box-shadow: 0 4px 12px -4px rgba(124, 107, 255, 0.8);
+}
+
+/* 滑块 */
+.settings-slider {
+    display: flex;
+    flex-direction: column;
+    gap: 8px;
+    padding: 12px 14px;
+    background: rgba(255, 255, 255, 0.035);
+    border: 1px solid rgba(255, 255, 255, 0.07);
+    border-radius: 14px;
+}
+
+.settings-slider__head {
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+}
+
+.settings-slider__label {
+    font-size: 12.5px;
+    color: #94a3b8;
+    font-weight: 600;
+}
+
+.settings-slider__value {
+    font-size: 12.5px;
+    font-weight: 700;
+    color: #a89bff;
+    font-variant-numeric: tabular-nums;
+    padding: 2px 8px;
+    border-radius: 999px;
+    background: rgba(124, 107, 255, 0.12);
+}
+
+.settings-slider__input {
+    width: 100%;
+    -webkit-appearance: none;
+    appearance: none;
+    height: 6px;
+    border-radius: 3px;
+    background: rgba(255, 255, 255, 0.1);
+    outline: none;
+    cursor: pointer;
+}
+
+.settings-slider__input::-webkit-slider-thumb {
+    -webkit-appearance: none;
+    appearance: none;
+    width: 20px;
+    height: 20px;
+    border-radius: 50%;
+    background: linear-gradient(135deg, #7c6bff, #4f8cff);
+    box-shadow:
+        0 0 0 3px rgba(124, 107, 255, 0.2),
+        0 4px 12px -2px rgba(124, 107, 255, 0.7);
+    cursor: pointer;
+    transition: transform 0.15s;
+}
+
+.settings-slider__input::-webkit-slider-thumb:active {
+    transform: scale(1.15);
+}
+
+.settings-slider__input::-moz-range-thumb {
+    width: 20px;
+    height: 20px;
+    border: none;
+    border-radius: 50%;
+    background: linear-gradient(135deg, #7c6bff, #4f8cff);
+    box-shadow:
+        0 0 0 3px rgba(124, 107, 255, 0.2),
+        0 4px 12px -2px rgba(124, 107, 255, 0.7);
+    cursor: pointer;
+}
+
+/* 开关 */
+.settings-toggle {
+    display: flex;
+    align-items: flex-start;
+    gap: 12px;
+    padding: 12px 14px;
+    background: rgba(255, 255, 255, 0.035);
+    border: 1px solid rgba(255, 255, 255, 0.07);
+    border-radius: 14px;
+    cursor: pointer;
+    transition: all 0.15s;
+}
+
+.settings-toggle:active {
+    background: rgba(255, 255, 255, 0.06);
+}
+
+.settings-toggle input[type="checkbox"] {
+    width: 18px;
+    height: 18px;
+    flex: none;
+    margin-top: 2px;
+    accent-color: #7c6bff;
+    cursor: pointer;
+}
+
+.settings-toggle__text {
+    flex: 1;
+    display: flex;
+    flex-direction: column;
+    gap: 3px;
+}
+
+.settings-toggle__title {
+    font-size: 13px;
+    color: #f1f5f9;
+    font-weight: 600;
+}
+
+.settings-toggle__sub {
+    font-size: 11px;
+    color: #64748b;
+    line-height: 1.45;
+}
+
+/* 重置按钮 */
+.settings-reset {
+    display: inline-flex;
+    align-items: center;
+    justify-content: center;
+    gap: 8px;
+    padding: 12px 16px;
+    background: rgba(255, 77, 109, 0.08);
+    border: 1px solid rgba(255, 77, 109, 0.25);
+    border-radius: 12px;
+    color: #ff8ba0;
+    font-family: inherit;
+    font-size: 13px;
+    font-weight: 600;
+    cursor: pointer;
+    transition: all 0.15s;
+    margin-top: 4px;
+}
+
+.settings-reset:active {
+    transform: scale(0.98);
+    background: rgba(255, 77, 109, 0.15);
+}
+
+/* ============================================================
+ *  聊天抽屉
+ * ============================================================ */
 .chat-drawer {
     position: fixed;
     bottom: 0;
@@ -2342,39 +2942,6 @@ onUnmounted(async () => {
     50% {
         opacity: 0.4;
     }
-}
-
-/* ★ 提示音开关 */
-.chat-drawer__sound {
-    display: inline-flex;
-    align-items: center;
-    gap: 5px;
-    padding: 6px 12px;
-    margin-right: 8px;
-    border-radius: 999px;
-    background: rgba(255, 255, 255, 0.06);
-    border: 1px solid rgba(255, 255, 255, 0.08);
-    color: #64748b;
-    font-family: inherit;
-    font-size: 11.5px;
-    font-weight: 600;
-    cursor: pointer;
-    transition: all 0.18s;
-}
-
-.chat-drawer__sound:active {
-    transform: scale(0.94);
-}
-
-.chat-drawer__sound.is-on {
-    background: rgba(34, 197, 94, 0.15);
-    border-color: rgba(34, 197, 94, 0.4);
-    color: #86efac;
-    box-shadow: 0 0 12px rgba(34, 197, 94, 0.25);
-}
-
-.chat-drawer__sound-text {
-    letter-spacing: 0.02em;
 }
 
 .chat-drawer__close {
@@ -2538,7 +3105,9 @@ onUnmounted(async () => {
     cursor: not-allowed;
 }
 
-/* 情绪弹幕条 */
+/* ============================================================
+ *  情绪弹幕条
+ * ============================================================ */
 .emotion-bar {
     position: relative;
     flex: none;
@@ -2677,7 +3246,9 @@ onUnmounted(async () => {
     color: #c7bfff;
 }
 
-/* 语音浮层 */
+/* ============================================================
+ *  语音浮层
+ * ============================================================ */
 .voice-panel {
     position: relative;
     flex: none;
@@ -2824,7 +3395,9 @@ onUnmounted(async () => {
     background: linear-gradient(90deg, transparent, rgba(124, 107, 255, 0.3), transparent);
 }
 
-/* 面板 */
+/* ============================================================
+ *  信息面板
+ * ============================================================ */
 .panel {
     flex: 0 0 auto;
     padding: 20px 16px 40px;
@@ -3133,7 +3706,7 @@ onUnmounted(async () => {
     margin: -4px 0;
 }
 
-/* ★ 语音音量卡片 */
+/* 语音音量卡片 */
 .voice-volume-card {
     padding: 16px 18px;
     border-radius: 18px;
@@ -3365,7 +3938,9 @@ onUnmounted(async () => {
     font-weight: 600;
 }
 
-/* 全屏 */
+/* ============================================================
+ *  全屏
+ * ============================================================ */
 .watch.is-fullscreen {
     position: fixed;
     top: 0;
@@ -3394,23 +3969,46 @@ onUnmounted(async () => {
     flex: none;
 }
 
+/* 填充模式 */
 .watch.is-fullscreen .stage__video {
     position: absolute;
     inset: 0;
     width: 100%;
     height: 100%;
+    object-fit: cover;
+    object-position: center center;
+    transition: object-position 0.25s ease, object-fit 0.25s ease;
+}
+
+.watch.is-fullscreen.fit-cover-bottom .stage__video {
+    object-position: center bottom;
+}
+
+.watch.is-fullscreen.fit-cover-center .stage__video {
+    object-position: center center;
+}
+
+.watch.is-fullscreen.fit-cover-top .stage__video {
+    object-position: center top;
+}
+
+.watch.is-fullscreen.fit-contain .stage__video {
     object-fit: contain;
+    object-position: center center;
 }
 
 .watch.is-fullscreen .toolbar,
 .watch.is-fullscreen .panel,
 .watch.is-fullscreen .voice-panel,
 .watch.is-fullscreen .emotion-bar,
-.watch.is-fullscreen .chat-drawer {
+.watch.is-fullscreen .chat-drawer,
+.watch.is-fullscreen .settings-drawer {
     display: none;
 }
 
-/* 过渡 */
+/* ============================================================
+ *  过渡
+ * ============================================================ */
 .fade-enter-active,
 .fade-leave-active {
     transition: opacity 0.22s ease;
